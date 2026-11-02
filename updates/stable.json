@@ -1,0 +1,11 @@
+{
+  "version": "0.1.32",
+  "notes": "# Fusion 0.1.32\r\n\r\n## 本次重点\r\n- 侧栏更新按钮缩小一半并下移，保留按压动画，去除下方冗余文字；更新状态通过颜色、悬停提示和弹窗展示。\r\n- 手动安装新版时直接覆盖升级，无需先卸载；同版本默认修复安装，保留账号、设置和会话绑定。\r\n\r\n## 问题修复\r\n- 缩小视觉按钮时保留 44×44 点击范围，检查失败也不会挤动 GitHub 入口。\r\n- 修正更新候选存在时悬停提示掩盖实际失败原因的问题。\r\n- 超时提示区分建立连接、等待响应头和读取响应，避免将建连超时误认为上游长时间生成；本次没有扩大等待时限或自动重放请求。\r\n\r\n## 注意事项\r\n- 更新会重开 Codex，请先完成任务并保存未发送输入。软件会等待在途请求和后台保存结束。\r\n- 升级前已启用的账号池会在新版检查后自动恢复一次；恢复失败时请在控制台查看原因并重试。\r\n- 同事连续使用后出现的 502 尚未取得对应诊断，具体根因与至少 60 分钟实机复验仍待完成，不宣称已根治。\r\n- 保留现有“导出诊断”；日志上报、服务器部署和定期汇总留到下一版本。\r\n",
+  "pub_date": "2026-11-02T18:09:30.906Z",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v0.1.32/Fusion_0.1.32_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVFqaVNWTEZzc3lKem5lZXR5QzFoNkZOckU0dXV6MmVBd05JUlI1VWZsWTI1cmVCeU1uZmo2aFlhUHFtVXMwOEhCUys2cmYreUJIVmJCRE81ZWJlMHdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjQyOTQxCWZpbGU6RnVzaW9uXzAuMS4zMl94NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xLjMyCmdRM3VmeUhTai9YQ1JZRmxldUNPTFU4ZTVQeDkzdVpMWC8raVZHTjZadCthTHA2VnBiVDJqTEMyZCtWalhYUnpPRTFrcGZzM0p2c090QW8yZVVnYURRPT0K"
+    }
+  }
+}
