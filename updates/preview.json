@@ -1,0 +1,11 @@
+{
+  "version": "0.1.30",
+  "notes": "Fusion 0.1.30 · 应用内安全更新首版（预览，实机验收待完成）\n\n- 启动后及每 6 小时检查更新，后台下载并校验签名。\n- 在“连接与设置”点一次安全更新，先恢复原接入、等待请求和后台保存结束，再安装。\n- 新版检查后恢复升级前已启用的账号池；失败保留原因和重试入口，不循环重启。\n- 保留上一版本的已校验修复包与独立官方接入恢复入口。\n- 稳定版与预览版分开，普通用户默认稳定版。\n\n现有版本需要最后手动安装一次。更新会重开 Codex，请先完成工作并保存输入。\n真实 Windows 10/11 升级、账号数据保留、修复及团队网络验收仍待完成；此说明不代表稳定版已经发布。\n",
+  "pub_date": "2026-11-02T14:43:24.472Z",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v0.1.30/Fusion_0.1.30_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWVwOVFiZCtpanlsRmhFZ2pGZmpXUDZYRld1SEI4WWJTMHYvWEtRdXJlUDh0N3RFbnY2eHFPb3VucHYwT3hUWlorU2pvRXB0Qm9MSXlPSUFrTGx3QndRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjMwNTE5CWZpbGU6RnVzaW9uXzAuMS4zMF94NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xLjMwCkZpd1k3Z3RqNDNVeVhmbDFzZFJxb1hFK25TN1YzOHhQK25uUUkybW1BTndBQzBDU2FtR3pJeHpHUmJodVpZN1d4aDBjKzZjK1RDcmsxRG10aGJvQkF3PT0K"
+    }
+  }
+}
