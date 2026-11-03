@@ -1,11 +1,11 @@
 {
-  "version": "1.0.1",
-  "notes": "# Fusion 1.0.1\r\n\r\n## 本次重点\r\n\r\n- 新增“最近上报”，持久保存最近 10 次成功回执，重启后仍可查看时间、数量和结果。\r\n- 维护端可直接分页查找已上传报告，完整统计全部错误，无需使用者寻找编号或重复上报。\r\n- 补齐本机入口排队、正文读取、大小和格式拒绝的日志，响应与日志沿用同一个请求编号。\r\n- 区分本机返回码、上游 HTTP 和有限失败事件原因；未知故障版本保持未知。\r\n- 保持原账号绑定、无自动重放、取消与停服排除、原配置恢复及签名更新机制。\r\n\r\n## 验收说明\r\n\r\n本版按维护者指令发布诊断维护更新，自动检查、安装包构建及签名验证已通过。服务端已完成 v1/v2 双协议兼容部署及公网验证；旧 pending 文件保持原编号可重试。最新回传确认1.0.0仍出现180秒发送至响应头超时，账号排队及授权等待不是该请求的主要耗时；具体链路原因仍待证据。诊断完善不等于业务断流、超时已修复，两台电脑的1.0.1真实客户端复验继续待完成。\r\n",
-  "pub_date": "2026-11-03T06:58:02.393Z",
+  "version": "1.0.2",
+  "notes": "# Fusion 1.0.2\r\n\r\n## 本次重点\r\n\r\n- 缓解发送前的瞬时连接失败：仅在能确认业务请求尚未发出、且属于可识别的短暂建连错误时，等待 300 毫秒后自动重连一次。\r\n- 重连继续使用原账号、原代理和原会话，最多一次，不增加原总等待上限；取消后立即停止。\r\n- 已发送后的超时、无响应头、生成途中断流、工具调用以及上游拒绝均不自动重放，避免重复提交任务。\r\n- 保留最近上报、原账号绑定、接入恢复和签名更新机制，不修改节点或代理配置。\r\n\r\n## 注意事项\r\n\r\n本版按维护者明确指令发布小范围缓解更新。此前的 180 秒等待响应头、HTTP 200 后断流及节点持续故障尚不能视为解决；本次恢复只覆盖明确发生在业务发送前的部分连接错误。自动化验证不代表真实节点效果，两台电脑的客户端复验和安装升级仍待完成。\r\n\r\n更新会重开 Codex，请先完成当前任务并保存输入。手动覆盖安装前先正常关闭账号池并从托盘退出 Fusion；已安装用户也可通过顶部更新按钮升级。\r\n",
+  "pub_date": "2026-11-03T09:48:26.875Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.1/Fusion_1.0.1_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWY2WVFtYVQzaXF0ejRxUmRKdExBY3hrWVlyVFkyYjlmWVNZZjZqMlRmRnpvU2NRR3dUNFVBR2FYVlowZnp1aExIdnozWkpYTXJZbFFtY1NiSFpscndnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjg5MDIwCWZpbGU6RnVzaW9uXzEuMC4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMQpVcDZZREsxaHZjM2V6emQrNzhMYTg3VU5kWng5M1k0QTkyZnBYWmY4TGFhM0xnek1SMlZ6WkJLbWd6cmx6U1RsVjJML3NJcW54NUhPbDFhK0w5djVBZz09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.2/Fusion_1.0.2_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWJiOFF6cDRVTlA3bGZCK0pSZENNeDRzTWI2aTNhQ3NHZWlMdlBnanZIV0dManRMSjJHS1c1dkszVXQxYjhhOHg1Vk9PakQ3R09IMUtkVGJ3MUdha1FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjk5MjQ1CWZpbGU6RnVzaW9uXzEuMC4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMgpIYU5oUFV3MWhKdE5sdDhac2REb0pxaXlQWFN1UkUwR0RuVUR4c1hicnJqWDcvL3ZaazZZcmV5UXNBdWgycEZ5cXB5MnlkZnJLTU1jK09Xbk15aHZEUT09Cg=="
     }
   }
 }
