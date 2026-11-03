@@ -1,11 +1,11 @@
 {
-  "version": "0.1.33",
-  "notes": "# Fusion 0.1.33\r\n\r\n## 本次重点\r\n- 账号卡新增会员到期倒计时，显示剩余天数和时分秒；悬停查看准确到期时间与上游核对时间。\r\n- 更新按钮从侧栏底部移到顶部通知星标左侧，保持原有大小、按压动画和更新操作。\r\n\r\n## 注意事项\r\n- 会员到期来自账号自身授权快照，随额度刷新同步提取；未提供日期显示未知，Free 显示无需倒计时。续费后可能延迟更新，以官方订阅页面为准。\r\n- 授权快照已到期时显示待确认，不据此禁用账号、改变调度或切换已有会话。\r\n- 沿用覆盖升级，保留账号、设置与原会话绑定。更新会重开 Codex，请先完成任务并保存未发送输入。\r\n- 真实 Win10/Win11 覆盖安装、会员日期回读及此前未完成的客户端验收继续待确认。\r\n",
-  "pub_date": "2026-11-03T02:37:30.805Z",
+  "version": "0.1.34",
+  "notes": "# Fusion 0.1.34\r\n\r\n## 本次重点\r\n\r\n- 新增日志上报：只筛选失败记录，确认后发送脱敏错误包。\r\n- 上报前显示错误条数、覆盖时间、压缩大小与接收位置；无错误时不联网。\r\n- 上传失败可手动重试同一报告或保存脱敏错误包，避免重复计数。\r\n- 补充失败阶段耗时与本机/上游 HTTP 区分，旧记录缺失字段保留未知。\r\n- 不改变账号绑定、调度和业务请求不重放规则。\r\n\r\n## 验收说明\r\n\r\n服务器联调和真实 Win10/Win11 客户端验收以维护记录为准；现有长时间使用 502 根因仍待确认。\r\n",
+  "pub_date": "2026-11-03T04:42:57.884Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v0.1.33/Fusion_0.1.33_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVcreW1SRlgrd3Jnc2dCOHZEem5pVGYvalRnWG9MRWZaMnR6SVUwekNvc2NRSGo1dk4xOEkvTVFLVytIS0NkaGVCWU53U2Y0aVhzWTg1MzVqQlo3UmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjcyOTQ4CWZpbGU6RnVzaW9uXzAuMS4zM194NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xLjMzCjhGeTVQTWtoeTQ2bmQrRkZEM2doRERtaGZqbjEvNTZZcHlPcUFKRENjTzRRandOOFNWb2hJa0gwbk81TmFobTY0YU1BY0pkUWpOaWk4WStTQ0VLVkJnPT0K"
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v0.1.34/Fusion_0.1.34_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWVoN1lqakN5WHhFWldQQ1lLZ2tTaWMrcExLbmRlRkZJTWRtdFk0Sk85SHhveUVrSUV1Ni92cW1oNWlVcU5ocXRCRkJ3eTdiTElWMEt6VjBMbjJuamdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjgwNjA5CWZpbGU6RnVzaW9uXzAuMS4zNF94NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xLjM0CnBtQkJrRUhPZFlZdDhQazJmSnVJb2ZDNnlhb3FTekpsd3FCN1BRRGpnOFNHeGJtdlFjTW05UTM2cTRvVUdBQ2N5b0xDM0FDcG40NmJZZ0FGTENKdUFnPT0K"
     }
   }
 }
