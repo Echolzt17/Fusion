@@ -1,11 +1,11 @@
 {
-  "version": "1.0.0",
-  "notes": "# Fusion 1.0.0\r\n\r\n## 本次重点\r\n\r\n- Fusion 正式版本号统一为 v1.0.0，安装包、应用版本及 npm/Cargo/Tauri 版本同步。\r\n- 完善 GitHub 产品首页：用途、五种选号策略、并发与会话绑定、额度和用量展示、安装及更新指引。\r\n- 说明 Tauri 2、Rust、React/TypeScript、本机网关、SQLite 和 Windows 凭据管理器的实际职责。\r\n- 明确源码暂不公开，GitHub 仅保留发布材料；列出稳定性设计、已有验证及待完成的实机验收。\r\n- 延续既有账号、数据目录、凭据服务、更新签名和恢复机制；不改变业务请求调度、不自动重放。\r\n\r\n## 验收说明\r\n\r\n用户确认自己的电脑本机已经测试，并明确要求公开 v1.0.0 正式版，本次依此发布。其他 Win10/Win11 机器、团队网络持续使用，以及未逐项回报的安装升级、账号绑定、在途排空、独立修复、四会话并发与 GitHub 在线升级继续保留待验证，不批量填为通过。用户另已确认 v0.1.34 真实错误日志上报成功；部分环境长时间使用的 502/503 业务故障根因仍待确认。\r\n",
-  "pub_date": "2026-11-03T05:37:51.776Z",
+  "version": "1.0.1",
+  "notes": "# Fusion 1.0.1\r\n\r\n## 本次重点\r\n\r\n- 新增“最近上报”，持久保存最近 10 次成功回执，重启后仍可查看时间、数量和结果。\r\n- 维护端可直接分页查找已上传报告，完整统计全部错误，无需使用者寻找编号或重复上报。\r\n- 补齐本机入口排队、正文读取、大小和格式拒绝的日志，响应与日志沿用同一个请求编号。\r\n- 区分本机返回码、上游 HTTP 和有限失败事件原因；未知故障版本保持未知。\r\n- 保持原账号绑定、无自动重放、取消与停服排除、原配置恢复及签名更新机制。\r\n\r\n## 验收说明\r\n\r\n本版按维护者指令发布诊断维护更新，自动检查、安装包构建及签名验证已通过。服务端已完成 v1/v2 双协议兼容部署及公网验证；旧 pending 文件保持原编号可重试。最新回传确认1.0.0仍出现180秒发送至响应头超时，账号排队及授权等待不是该请求的主要耗时；具体链路原因仍待证据。诊断完善不等于业务断流、超时已修复，两台电脑的1.0.1真实客户端复验继续待完成。\r\n",
+  "pub_date": "2026-11-03T06:58:02.393Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.0/Fusion_1.0.0_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWNsZGR1NkxIckhOZG1GcjRsN25JQTJpeHh6aFAzSlhLb1JPL3l6NUVnaXRtdVV4b1NKVUhlOERXejF6NEpoYlVLMHo4dUZxMDF0N0prYUhodWV2NmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjgzOTY1CWZpbGU6RnVzaW9uXzEuMC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMApNaUlLNmtzajM4UDJ6enBpbkFnR3JKbWl1a1E5WmhDb0dGeVBTUHVEcFVobDZreGFMUFV6NWhXMEVCZThPZy9RRUdlTTF4TlBvdXI5MVhjWkl1am5DUT09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.1/Fusion_1.0.1_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWY2WVFtYVQzaXF0ejRxUmRKdExBY3hrWVlyVFkyYjlmWVNZZjZqMlRmRnpvU2NRR3dUNFVBR2FYVlowZnp1aExIdnozWkpYTXJZbFFtY1NiSFpscndnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjg5MDIwCWZpbGU6RnVzaW9uXzEuMC4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMQpVcDZZREsxaHZjM2V6emQrNzhMYTg3VU5kWng5M1k0QTkyZnBYWmY4TGFhM0xnek1SMlZ6WkJLbWd6cmx6U1RsVjJML3NJcW54NUhPbDFhK0w5djVBZz09Cg=="
     }
   }
 }
