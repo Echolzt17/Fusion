@@ -1,11 +1,11 @@
 {
-  "version": "1.0.4",
-  "notes": "# Fusion 1.0.4\r\n\r\n## 本次重点\r\n\r\n- 首页 Token 卡片汇总本机 Codex 用量，包含账号池及可读取的官方／其他接入历史，避免池内记录重复计数。\r\n- 近 7 天按电脑本地日期显示，点击图表可在柱状图与折线图之间切换，并记住上次选择。\r\n- 新增今日每小时运行时长折线图，纵轴每 10 分钟一格；多任务重叠只计一次，每小时最多 60 分钟。\r\n- 首次后台补读历史，之后每 15 秒增量更新；归档、重启和原记录删除不减少已导入累计。\r\n\r\n## 统计说明\r\n\r\n仅统计本机仍可读取的用量记录，不从套餐额度或上下文累计快照估算消耗。旧记录缺失或无法还原日期时明确提示覆盖不完整；缓存属于输入，推理属于输出，不重复相加。\r\n\r\n运行时长包含思考和工具执行，未结束任务只统计到最后可确认活动并标“暂计”，未来小时不填零。账号卡、Codex 挂件和请求日志仍显示账号池范围。\r\n\r\n## 注意事项\r\n\r\n本版按维护者明确要求发布。自动化回归及现有本机历史只读核对已完成；新版实际桌面操作、新请求与重启、两台安装及 GitHub 在线升级仍待验收。既有并发压力测试的偶发失败和部分环境的业务网络问题继续跟踪，发布不代表这些问题已解决。\r\n\r\n沿用 1.0.3 的关闭恢复和更新确认流程。更新会重开 Codex，请先完成任务并保存输入；手动覆盖安装前先正常关闭账号池并退出 Fusion。\r\n",
-  "pub_date": "2026-11-04T07:41:46.315Z",
+  "version": "1.0.5",
+  "notes": "# Fusion 1.0.5\n\n## 本次重点\n\n- 修复 Codex 已退出后仍可能提示“无法核验 Codex 进程路径”，导致关闭恢复未完成、后续更新被阻止的问题。\n- 在读取进程路径与身份前后，检查同一进程句柄是否已经退出；读取期间恰好退出也能正确识别。\n- 对仍存活的进程继续严格核验身份与权限，保留原接入恢复记录及更新安装保护。\n\n## 升级说明\n\n此修复安装到 1.0.5 后生效。旧版如果已经卡在“关闭未完成”，请先保存任务并完整退出 Codex，不要手动重开；然后在 Fusion 点击“重试关闭”，等待其自动重开 Codex 并完成恢复，再从托盘退出 Fusion，手动安装本版。不要删除账号数据或恢复记录。\n\n正常更新会重开 Codex，请先完成任务并保存输入。沿用本机总用量、7 天柱状／折线图及今日每小时运行时长功能。\n\n## 验证范围\n\n本版按维护者明确要求发布。已在本机临时进程复现旧路径查询错误，修复后的桌面回归、构建、安装保护及签名核验通过。当前客户端只读身份识别和隔离协议检查已通过；真实关闭／重开、安装后启停、两台 Windows 安装与 GitHub 在线升级仍待验收。\n\n此前部分环境的 502／503、等待超时、生成中途断流和默认并行压力测试偶发失败继续跟踪，本次发布不代表这些业务网络问题已经解决。\n",
+  "pub_date": "2026-11-04T08:30:06.649Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.4/Fusion_1.0.4_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWNwbHFaMFpJVkpIc1RERDM3bndDc05QUDdSbDdtb3dQREw2dG5NbmpGanl0SUZISTM5b0l2QUlmQll4NVQrWDFrSndPK1daU0s3MkUyWU8wbFU1QlE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzc4MDQ0CWZpbGU6RnVzaW9uXzEuMC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNApwSWZ0VmowVUt0S25zaUtuclVQbVRYV0s5Z09GZWZKYVhLUy9kYnNLWkVTWnNhUnJDak9YVHJJY0taSFNiRGN6WFozaDZwTndyQVREMzdyNTZNcWtBZz09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.5/Fusion_1.0.5_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVlDTXNoUEZmaHBSS2RJbVVSVktQSTh2dVhkR0JsaEMrUzhBVUkrWnNyc3pwcmhDSVR1b0pOczFBa3hQKzgyNTVHczg0YXYxblhscEppQjZGbUQ5d1FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzgwMjQzCWZpbGU6RnVzaW9uXzEuMC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNQpsSDh1cEEwWGVhR3o0WW9USW4yZnRYVXdmd0prc2w1LzRJdDc2UTVoTVhGTWk2QzgrU0tnY0pqVUpmbitna3dkK2NUVTJsNTUzeGd3T1p5UnNiKzVEUT09Cg=="
     }
   }
 }
