@@ -1,11 +1,11 @@
 {
-  "version": "1.0.2",
-  "notes": "# Fusion 1.0.2\r\n\r\n## 本次重点\r\n\r\n- 缓解发送前的瞬时连接失败：仅在能确认业务请求尚未发出、且属于可识别的短暂建连错误时，等待 300 毫秒后自动重连一次。\r\n- 重连继续使用原账号、原代理和原会话，最多一次，不增加原总等待上限；取消后立即停止。\r\n- 已发送后的超时、无响应头、生成途中断流、工具调用以及上游拒绝均不自动重放，避免重复提交任务。\r\n- 保留最近上报、原账号绑定、接入恢复和签名更新机制，不修改节点或代理配置。\r\n\r\n## 注意事项\r\n\r\n本版按维护者明确指令发布小范围缓解更新。此前的 180 秒等待响应头、HTTP 200 后断流及节点持续故障尚不能视为解决；本次恢复只覆盖明确发生在业务发送前的部分连接错误。自动化验证不代表真实节点效果，两台电脑的客户端复验和安装升级仍待完成。\r\n\r\n更新会重开 Codex，请先完成当前任务并保存输入。手动覆盖安装前先正常关闭账号池并从托盘退出 Fusion；已安装用户也可通过顶部更新按钮升级。\r\n",
-  "pub_date": "2026-11-03T09:48:26.875Z",
+  "version": "1.0.3",
+  "notes": "# Fusion 1.0.3\r\n\r\n## 本次重点\r\n\r\n- 修复 Codex 更新后，重试关闭被旧安装路径永久阻塞的问题；先核验旧进程是否存活，再选择当前客户端。\r\n- 顶部紫色或红色更新按钮只检查和展示更新说明，只有点击弹窗“立即更新”才下载用户确认的版本。\r\n- 下载及修复文件准备时可选择“稍后更新”取消；修复包显示下载进度，网络长时间无数据会报错退出。\r\n- 保留账号绑定、原接入恢复、签名校验和已有请求不重放的保护。\r\n\r\n## 注意事项\r\n\r\n本版按维护者明确要求发布。代码回归、构建与签名验证已通过，真实关机恢复、两台电脑的更新弹窗和在线安装仍待验收；同事现场卡顿的唯一原因尚未证实。新的更新选择和取消流程在升级到 1.0.3 后生效，旧版本仍使用原有行为。\r\n\r\n开始安装安全收尾后无法取消；更新会重开 Codex，请先完成任务并保存输入。手动覆盖安装前仍须恢复接入并退出 Fusion。旧版卡在关闭时，不要直接删除恢复记录或覆盖运行中的程序，需先完成受控恢复。\r\n",
+  "pub_date": "2026-11-04T03:46:16.036Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.2/Fusion_1.0.2_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWJiOFF6cDRVTlA3bGZCK0pSZENNeDRzTWI2aTNhQ3NHZWlMdlBnanZIV0dManRMSjJHS1c1dkszVXQxYjhhOHg1Vk9PakQ3R09IMUtkVGJ3MUdha1FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNjk5MjQ1CWZpbGU6RnVzaW9uXzEuMC4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMgpIYU5oUFV3MWhKdE5sdDhac2REb0pxaXlQWFN1UkUwR0RuVUR4c1hicnJqWDcvL3ZaazZZcmV5UXNBdWgycEZ5cXB5MnlkZnJLTU1jK09Xbk15aHZEUT09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.3/Fusion_1.0.3_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWFEMlFGeUp6YllJemV3ODBPSExNSUdoelhLSmRRc0U5QlhzcVdydjNMMEIxNFJpSnlqc0ZNd2oxRjFMZU9VMnVBQlorUjdZZGF2RUx3YzBTSEZSOVFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzYzOTU2CWZpbGU6RnVzaW9uXzEuMC4zX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMwpHOHJmcUZQMzhYaFRCTXVRTmpkTFhyVFprdXlCR1F0dzY2WTZpK1A2SmN3aStyYW9vazl1SXdvYWdoUVM2TTI5Zm8xbVZsMklZbnZycVc2OXZtMXRCQT09Cg=="
     }
   }
 }
