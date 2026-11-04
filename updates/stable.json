@@ -1,11 +1,11 @@
 {
-  "version": "1.0.3",
-  "notes": "# Fusion 1.0.3\r\n\r\n## 本次重点\r\n\r\n- 修复 Codex 更新后，重试关闭被旧安装路径永久阻塞的问题；先核验旧进程是否存活，再选择当前客户端。\r\n- 顶部紫色或红色更新按钮只检查和展示更新说明，只有点击弹窗“立即更新”才下载用户确认的版本。\r\n- 下载及修复文件准备时可选择“稍后更新”取消；修复包显示下载进度，网络长时间无数据会报错退出。\r\n- 保留账号绑定、原接入恢复、签名校验和已有请求不重放的保护。\r\n\r\n## 注意事项\r\n\r\n本版按维护者明确要求发布。代码回归、构建与签名验证已通过，真实关机恢复、两台电脑的更新弹窗和在线安装仍待验收；同事现场卡顿的唯一原因尚未证实。新的更新选择和取消流程在升级到 1.0.3 后生效，旧版本仍使用原有行为。\r\n\r\n开始安装安全收尾后无法取消；更新会重开 Codex，请先完成任务并保存输入。手动覆盖安装前仍须恢复接入并退出 Fusion。旧版卡在关闭时，不要直接删除恢复记录或覆盖运行中的程序，需先完成受控恢复。\r\n",
-  "pub_date": "2026-11-04T03:46:16.036Z",
+  "version": "1.0.4",
+  "notes": "# Fusion 1.0.4\r\n\r\n## 本次重点\r\n\r\n- 首页 Token 卡片汇总本机 Codex 用量，包含账号池及可读取的官方／其他接入历史，避免池内记录重复计数。\r\n- 近 7 天按电脑本地日期显示，点击图表可在柱状图与折线图之间切换，并记住上次选择。\r\n- 新增今日每小时运行时长折线图，纵轴每 10 分钟一格；多任务重叠只计一次，每小时最多 60 分钟。\r\n- 首次后台补读历史，之后每 15 秒增量更新；归档、重启和原记录删除不减少已导入累计。\r\n\r\n## 统计说明\r\n\r\n仅统计本机仍可读取的用量记录，不从套餐额度或上下文累计快照估算消耗。旧记录缺失或无法还原日期时明确提示覆盖不完整；缓存属于输入，推理属于输出，不重复相加。\r\n\r\n运行时长包含思考和工具执行，未结束任务只统计到最后可确认活动并标“暂计”，未来小时不填零。账号卡、Codex 挂件和请求日志仍显示账号池范围。\r\n\r\n## 注意事项\r\n\r\n本版按维护者明确要求发布。自动化回归及现有本机历史只读核对已完成；新版实际桌面操作、新请求与重启、两台安装及 GitHub 在线升级仍待验收。既有并发压力测试的偶发失败和部分环境的业务网络问题继续跟踪，发布不代表这些问题已解决。\r\n\r\n沿用 1.0.3 的关闭恢复和更新确认流程。更新会重开 Codex，请先完成任务并保存输入；手动覆盖安装前先正常关闭账号池并退出 Fusion。\r\n",
+  "pub_date": "2026-11-04T07:41:46.315Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.3/Fusion_1.0.3_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWFEMlFGeUp6YllJemV3ODBPSExNSUdoelhLSmRRc0U5QlhzcVdydjNMMEIxNFJpSnlqc0ZNd2oxRjFMZU9VMnVBQlorUjdZZGF2RUx3YzBTSEZSOVFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzYzOTU2CWZpbGU6RnVzaW9uXzEuMC4zX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuMwpHOHJmcUZQMzhYaFRCTXVRTmpkTFhyVFprdXlCR1F0dzY2WTZpK1A2SmN3aStyYW9vazl1SXdvYWdoUVM2TTI5Zm8xbVZsMklZbnZycVc2OXZtMXRCQT09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.4/Fusion_1.0.4_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWNwbHFaMFpJVkpIc1RERDM3bndDc05QUDdSbDdtb3dQREw2dG5NbmpGanl0SUZISTM5b0l2QUlmQll4NVQrWDFrSndPK1daU0s3MkUyWU8wbFU1QlE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzc4MDQ0CWZpbGU6RnVzaW9uXzEuMC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNApwSWZ0VmowVUt0S25zaUtuclVQbVRYV0s5Z09GZWZKYVhLUy9kYnNLWkVTWnNhUnJDak9YVHJJY0taSFNiRGN6WFozaDZwTndyQVREMzdyNTZNcWtBZz09Cg=="
     }
   }
 }
