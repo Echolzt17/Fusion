@@ -1,11 +1,11 @@
 {
-  "version": "1.0.5",
-  "notes": "# Fusion 1.0.5\n\n## 本次重点\n\n- 修复 Codex 已退出后仍可能提示“无法核验 Codex 进程路径”，导致关闭恢复未完成、后续更新被阻止的问题。\n- 在读取进程路径与身份前后，检查同一进程句柄是否已经退出；读取期间恰好退出也能正确识别。\n- 对仍存活的进程继续严格核验身份与权限，保留原接入恢复记录及更新安装保护。\n\n## 升级说明\n\n此修复安装到 1.0.5 后生效。旧版如果已经卡在“关闭未完成”，请先保存任务并完整退出 Codex，不要手动重开；然后在 Fusion 点击“重试关闭”，等待其自动重开 Codex 并完成恢复，再从托盘退出 Fusion，手动安装本版。不要删除账号数据或恢复记录。\n\n正常更新会重开 Codex，请先完成任务并保存输入。沿用本机总用量、7 天柱状／折线图及今日每小时运行时长功能。\n\n## 验证范围\n\n本版按维护者明确要求发布。已在本机临时进程复现旧路径查询错误，修复后的桌面回归、构建、安装保护及签名核验通过。当前客户端只读身份识别和隔离协议检查已通过；真实关闭／重开、安装后启停、两台 Windows 安装与 GitHub 在线升级仍待验收。\n\n此前部分环境的 502／503、等待超时、生成中途断流和默认并行压力测试偶发失败继续跟踪，本次发布不代表这些业务网络问题已经解决。\n",
-  "pub_date": "2026-11-04T08:30:06.649Z",
+  "version": "1.0.6",
+  "notes": "# Fusion 1.0.6\n\n## 本次重点\n\n- 网络波动、普通 502/503 和断流不再使健康账号暂避；原会话与加密上下文保持原账号。\n- 仅能确认尚未派发的瞬时连接故障最多重连一次，等待3—5秒后使用10秒连接限制；已发送或状态不明确的请求不重放。\n- 传输失败通知按五分钟汇总，可展开查看请求；同一已读窗口不重复提醒，授权和存储问题独立保留。\n- 增加本地七天小时统计和有限传输诊断；手动预览后上报，支持仅上传统计摘要，不上传逐条成功记录或内容。\n\n## 升级与验证范围\n\n报告接收服务已兼容 v1/v2/v3。本版按维护者明确要求发布；真实安装、两台电脑各两个正常使用日和100条请求的稳定性观察仍待完成，不代表所有502/503或断流已解决。\n\n正常关闭账号池并从托盘退出后安装；不要强制结束在途请求。网络主备扩展另行启用与验收，保留原主节点，避免与软件改动同时改变变量。\n\n发送前恢复不能接续已经断开的响应流。15秒只描述额外发送前恢复阶段，不是模型生成总限时。正文进度是本机HTTP层观测，不证明远端已收到或执行。\n",
+  "pub_date": "2026-11-05T03:50:17.179Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.5/Fusion_1.0.5_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVlDTXNoUEZmaHBSS2RJbVVSVktQSTh2dVhkR0JsaEMrUzhBVUkrWnNyc3pwcmhDSVR1b0pOczFBa3hQKzgyNTVHczg0YXYxblhscEppQjZGbUQ5d1FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzgwMjQzCWZpbGU6RnVzaW9uXzEuMC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNQpsSDh1cEEwWGVhR3o0WW9USW4yZnRYVXdmd0prc2w1LzRJdDc2UTVoTVhGTWk2QzgrU0tnY0pqVUpmbitna3dkK2NUVTJsNTUzeGd3T1p5UnNiKzVEUT09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.6/Fusion_1.0.6_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVQybm9KSjlBQXJXVnBiOHV4TDlLNGZua240YnkwRFJiN2NkaGxwNmd3My9SSlJ0azVJQkpmUnRtL3dPWWltUlRzbXVjNnhET2NlQ05Ib29RcDYvL3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODUwMDc3CWZpbGU6RnVzaW9uXzEuMC42X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNgp5bUJzdWU2VjlHVUpWYUlCZWdzdDZJcWZIbnAvS0pMU3Z4RkZDNTJCZDlvWG9ncHk2SFBrYWg4dkZTWkJWcmIxZndJS2xvS0FuS2lVaG4wSkY0TEZCUT09Cg=="
     }
   }
 }
