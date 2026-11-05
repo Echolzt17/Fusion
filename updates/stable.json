@@ -1,11 +1,11 @@
 {
-  "version": "1.0.6",
-  "notes": "# Fusion 1.0.6\n\n## 本次重点\n\n- 网络波动、普通 502/503 和断流不再使健康账号暂避；原会话与加密上下文保持原账号。\n- 仅能确认尚未派发的瞬时连接故障最多重连一次，等待3—5秒后使用10秒连接限制；已发送或状态不明确的请求不重放。\n- 传输失败通知按五分钟汇总，可展开查看请求；同一已读窗口不重复提醒，授权和存储问题独立保留。\n- 增加本地七天小时统计和有限传输诊断；手动预览后上报，支持仅上传统计摘要，不上传逐条成功记录或内容。\n\n## 升级与验证范围\n\n报告接收服务已兼容 v1/v2/v3。本版按维护者明确要求发布；真实安装、两台电脑各两个正常使用日和100条请求的稳定性观察仍待完成，不代表所有502/503或断流已解决。\n\n正常关闭账号池并从托盘退出后安装；不要强制结束在途请求。网络主备扩展另行启用与验收，保留原主节点，避免与软件改动同时改变变量。\n\n发送前恢复不能接续已经断开的响应流。15秒只描述额外发送前恢复阶段，不是模型生成总限时。正文进度是本机HTTP层观测，不证明远端已收到或执行。\n",
-  "pub_date": "2026-11-05T03:50:17.179Z",
+  "version": "1.0.7",
+  "notes": "# Fusion 1.0.7\n\n## 本次重点\n\n- 更新时自动继续中断的正常关闭与恢复，不再仅因“接入尚未稳定”挡住修复流程；恢复失败显示具体原因并保留原记录。\n- 检查旧客户端记录时先比对进程创建时间，排除已被复用的 PID 后再查询路径，避免无关进程的路径权限影响恢复。\n- Fusion 独立更新：账号池已关闭且接入已脱离时，不关闭或重启正在使用官方或其他接入的 Codex。\r\n- 关闭账号池、托盘退出，或账号池开启时的更新前收尾，会恢复原接入、等待在途请求完成并完整退出 Codex，不再中途打开原接入客户端。\r\n- 更新完成后账号池始终保持关闭，只有用户点击“启动账号池”才打开 Codex；旧更新恢复标记也不会触发自动启用。冷启动直接检查当前用户商店安装，使用包内内核的临时副本完成隔离检查，配置后再打开一次。\r\n- 配置冲突及救援恢复不绕过确认；失败保留恢复记录和具体原因。\n\n## 升级与验证范围\n\n本版按维护者明确要求发布。真实官方 Codex 持续运行、账号池开启状态更新后的手动启动、Win10/Win11 覆盖安装及在线升级仍待验收；自动回归与公开发布不代表这些实机场景已经通过。\n\n已卡住的旧版不会自动获得新逻辑：请先完成任务并保存输入，完整退出 Codex，在 Fusion 重试关闭并从托盘退出后再安装。不要强制结束在途请求或直接删除恢复记录。\n\n保留 1.0.6 的稳定性与诊断改动；本次修复不代表所有网络 502/503 或断流已解决。\n",
+  "pub_date": "2026-11-05T06:18:41.132Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.6/Fusion_1.0.6_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVQybm9KSjlBQXJXVnBiOHV4TDlLNGZua240YnkwRFJiN2NkaGxwNmd3My9SSlJ0azVJQkpmUnRtL3dPWWltUlRzbXVjNnhET2NlQ05Ib29RcDYvL3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODUwMDc3CWZpbGU6RnVzaW9uXzEuMC42X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNgp5bUJzdWU2VjlHVUpWYUlCZWdzdDZJcWZIbnAvS0pMU3Z4RkZDNTJCZDlvWG9ncHk2SFBrYWg4dkZTWkJWcmIxZndJS2xvS0FuS2lVaG4wSkY0TEZCUT09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.7/Fusion_1.0.7_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTWZHVDc0ZkpaeCtsK2dMSTN0aG93YkJaM3M1aTVOZnJPU0s0UnF5NiswQWkrRkRhMGIxUm83YUZEcDZpcjM2WjNJYkpsQm5JSWJuL0NvRVBza3ZuL3d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODU5NDU1CWZpbGU6RnVzaW9uXzEuMC43X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuNwpocGFUNUNNdlJBZ0lydXNOWllUdm5nQ3ByYUdwUXRDdkdRMUcwTk5jUEQ3d2RnY3NGM1F5cW10QXhLOVk1OERUM3N3ZE5CcE5hNk9wUUs0dXY2QlpCQT09Cg=="
     }
   }
 }
