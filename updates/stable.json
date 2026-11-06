@@ -1,11 +1,11 @@
 {
-  "version": "1.0.8",
-  "notes": "# Fusion 1.0.8\r\n\r\n## 本次重点\r\n\r\n- 当前首选账号卡片持续呈现抬升、双层错位底板和青紫描边，帮助快速识别当前选择。\r\n- 切换账号后，原卡片恢复普通状态，新卡片自动获得相同立体效果；账号选择仍由现有后端状态决定。\r\n- 保留卡片信息和操作按钮，适配明暗主题、窄窗口与单账号布局；减少动态效果时保留静态立体外观。\r\n\r\n## 升级与验证范围\r\n\r\n本版按维护者明确要求发布。前端检查与预览结果见维护记录，真实桌面与本机升级实际结果分别记录；其他电脑、真实业务及 GitHub 在线升级未完成的项目继续待验收。\r\n\r\n沿用 1.0.7 独立更新规则：账号池关闭且接入已脱离时不关闭或重启 Codex；账号池开启时先完成正常关闭，更新后保持关闭，仅点击“启动账号池”时打开。已有会话和加密上下文保持原账号。\r\n\r\n本次未修复仍在排查的胶囊间歇点击/拖动问题，也不代表所有网络 502/503 或断流已经解决。\r\n",
-  "pub_date": "2026-11-06T05:30:19.462Z",
+  "version": "1.0.9",
+  "notes": "# Fusion 1.0.9\n\n## 本次重点\n\n- 账号控制台和连接页补充旧聊天续接说明：首选账号影响新会话，已有聊天保持原账号；关闭账号池只恢复启用前的接入。\n- 移除账号前明确提示旧聊天绑定无法恢复，重新添加也不会复活；临时停用建议使用暂停。\n- 手动额度刷新独立显示进度，不再锁住账号池启停和其他账号操作；全部刷新合并在途读取，完成后汇总部分失败。\n- 尚未发送的业务请求可等待原账号短期冷却，最多 60 秒且计入原排队预算；当前请求显示等待阶段并支持定向取消。\n- 手动诊断增加有限的挂件输入链路计数；开发测试增加临时大历史统计基准，为后续定位性能和交互问题提供依据。\n\n## 升级与验证范围\n\n本版按维护者明确要求发布，自动化检查、签名构建及真实验收的实际结果分别记录。Win10/Win11 真实业务、冷却恢复、额度刷新与启停并行，以及 GitHub 在线升级等未完成项目继续待验收。\n\n沿用独立更新规则：账号池关闭且接入已脱离时不关闭或重启 Codex；账号池开启时先完成正常关闭，更新后保持关闭，仅点击“启动账号池”时打开。\n\n已有会话和加密上下文保持原账号，旧池聊天不能直接迁移到官方账号。收到 429、已开始输出、工具调用或执行状态不明的请求不自动重放。本次没有扩大发送前重连次数。\n\n挂件偶发点击/拖动失灵仍需现场定位，新增诊断不代表该故障已经修复；临时统计基准不等于生产性能结论。本次也不代表所有网络 502/503 或断流已解决。\n",
+  "pub_date": "2026-11-06T08:46:01.153Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.8/Fusion_1.0.8_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVRRbEcyUnNLMWpZRXU3b0xEK2M5Z2M4eXo0NEoyOWh4TVZEV093c0ZFZjlpSk8xVmkxbVVCdW5DRXZnVGVkdTcyL3hyUXNsTWNLVUxnakFxMHhXS0FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQyNzc5CWZpbGU6RnVzaW9uXzEuMC44X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuOAozQUU5bmtBd1laUFlmRVFMdFdnZWZiSDR2WVc0R1Z2alMvQk1VaE9HN05hUmpZcEdLZmlkNWJleTdtdW1rd01XeGlhbVBxSmJiMmVBYnpGa1ducFdBQT09Cg=="
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.9/Fusion_1.0.9_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVhWeVMzazgrVXBDNVRXalYxdW9mUGRYTzNHOElva1ZyWm5FZFVFQTljK0ZkUjVHTnU0eGFxNFpoK1lyWVgzTzJwUkkwRGtCN2JvR2JvT05Ma0lOR0F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTU0Njk2CWZpbGU6RnVzaW9uXzEuMC45X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoxLjAuOQovMEJBUFVZTGVVRWFENkJYdmNiSWpxUXJHUUZBbWhMbGVRTERtcVZHempGVzlFejJvYTNsT2VSNkpMK2V6WlFTaENsUTM2bFpsSUduTTZseTl2MmhCQT09Cg=="
     }
   }
 }
