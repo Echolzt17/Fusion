@@ -441,8 +441,48 @@ fn applied_status_detects_configuration_conflicts() {
 #[cfg(windows)]
 #[test]
 fn windows_vault_handles_large_tokens_and_replacement() {
+    // A failed assertion must not accumulate native credentials across runs.
+    // Match only this test's UUID namespace, and inspect target names, never blobs.
+    struct FixtureCleanup(String);
+    impl Drop for FixtureCleanup {
+        fn drop(&mut self) {
+            use windows_sys::Win32::{
+                Foundation::{GetLastError, ERROR_NOT_FOUND},
+                Security::Credentials::*,
+            };
+            let filter: Vec<u16> = format!("{}*", self.0).encode_utf16().chain(Some(0)).collect();
+            let mut count = 0;
+            let mut entries = std::ptr::null_mut();
+            unsafe {
+                if CredEnumerateW(filter.as_ptr(), 0, &mut count, &mut entries) == 0 {
+                    let code = GetLastError();
+                    if code != ERROR_NOT_FOUND { eprintln!("fixture cleanup enumerate error: {code}"); }
+                    return;
+                }
+                let mut failures = 0usize;
+                for entry in std::slice::from_raw_parts(entries, count as usize) {
+                    let entry = &**entry;
+                    if entry.Type != CRED_TYPE_GENERIC || entry.TargetName.is_null() { continue; }
+                    let mut len = 0;
+                    while len < 32768 && *entry.TargetName.add(len) != 0 { len += 1; }
+                    if len == 32768 { continue; }
+                    let Ok(target) = String::from_utf16(std::slice::from_raw_parts(entry.TargetName, len)) else { continue; };
+                    let Some(key) = target.strip_suffix(".PersonalCodexPool") else { continue; };
+                    let owned = key == self.0 || key.strip_prefix(&format!("{}/", self.0)).is_some_and(|rest| {
+                        let Some((generation, part)) = rest.split_once('/') else { return false; };
+                        uuid::Uuid::parse_str(generation).is_ok_and(|id| id.to_string() == generation)
+                            && part.parse::<usize>().is_ok_and(|index| index < 128 && index.to_string() == part)
+                    });
+                    if owned && CredDeleteW(entry.TargetName, CRED_TYPE_GENERIC, 0) == 0 && GetLastError() != ERROR_NOT_FOUND { failures += 1; }
+                }
+                CredFree(entries.cast());
+                if failures > 0 { eprintln!("fixture cleanup failed target count: {failures}"); }
+            }
+        }
+    }
     let v = crate::vault::system_vault().unwrap();
     let key = format!("test/{}", uuid::Uuid::new_v4());
+    let _cleanup = FixtureCleanup(key.clone());
     let secret = "凭据token".repeat(3000);
     v.set(&key, &secret).unwrap();
     assert!(v.get(&key).unwrap().as_deref() == Some(&secret));

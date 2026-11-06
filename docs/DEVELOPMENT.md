@@ -1,6 +1,6 @@
 # Fusion 开发指南
 
-本指南用于在另一台 Windows 电脑检出源码并继续开发。当前开发范围是 Windows 本机 Codex 账号池，技术栈为 Tauri 2、Rust、React / TypeScript；不包含账号同步或多供应商 API 编排。
+本指南用于在另一台 Windows 电脑检出源码并继续开发。当前开发范围包括 Windows 本机 Codex 订阅账号池、Codex / Claude Code 独立客户端与手动 API 来源、账号池专用代理，以及明确操作的可读聊天交接。技术栈为 Tauri 2、Rust、React / TypeScript；不包含账号同步、跨厂商订阅池或 API Key 自动池化。
 
 ## 1. 准备环境
 
@@ -19,6 +19,7 @@
 git clone https://github.com/Echolzt17/Fusion.git
 cd Fusion
 npm ci
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-network-kernel.ps1
 npm run check
 npm test
 npm run web:build

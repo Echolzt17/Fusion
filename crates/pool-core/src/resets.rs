@@ -21,9 +21,8 @@ impl Accounts {
     pub async fn reset_credits(self: &Arc<Self>, id: &str) -> Result<ResetCredits> {
         let t = self.token(id).await?;
         let a = self.store.account(id)?;
-        let r = self
-            .http
-            .get(&self.reset_endpoint).await?
+        let (request, _route_lease) = self.http.pool_get(&self.reset_endpoint).await?;
+        let r = request
             .bearer_auth(t.access_token)
             .header("ChatGPT-Account-ID", a.account_id)
             .timeout(std::time::Duration::from_secs(20))
@@ -67,9 +66,8 @@ impl Accounts {
         self.store.set(&key, &request)?;
         let uncertain =
             "重置结果未确认；请先刷新额度和重置卡。若仍可用，可手动重试同一张卡（沿用原请求编号）";
-        let r = self
-            .http
-            .post(&format!("{}/consume", self.reset_endpoint)).await?
+        let (builder, _route_lease) = self.http.pool_post(&format!("{}/consume", self.reset_endpoint)).await?;
+        let r = builder
             .bearer_auth(t.access_token)
             .header("ChatGPT-Account-ID", a.account_id)
             .json(&json!({"redeem_request_id": request, "credit_id": credit_id}))

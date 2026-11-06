@@ -151,7 +151,8 @@ impl OAuth {
                 _=cancel.cancelled()=>Err("登录已取消".into()),
                 r=tokio::time::timeout(Duration::from_secs(600),async {
                     let code=rx.await.map_err(|_|"登录回调已关闭")??;
-                    let r=this.accounts.http.post("https://auth.openai.com/oauth/token").await?.timeout(Duration::from_secs(30))
+                    let (request,_route_lease)=this.accounts.http.pool_post("https://auth.openai.com/oauth/token").await?;
+                    let r=request.timeout(Duration::from_secs(30))
                         .form(&[("grant_type","authorization_code"),("client_id",CLIENT_ID),("redirect_uri",&redirect),("code_verifier",&verifier),("code",&code)])
                         .send().await.map_err(|_|"授权交换网络失败，请检查网络后重试")?;
                     if !r.status().is_success(){return Err(exchange_error(r.status().as_u16()));}

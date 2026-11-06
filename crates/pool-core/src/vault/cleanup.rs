@@ -8,6 +8,17 @@ fn owned_target(target: &str) -> bool {
             let id = rest.split('/').next().unwrap_or_default();
             if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) { return false; }
             &rest[id.len()..]
+        } else if let Some(rest) = key.strip_prefix("network/subscription/") {
+            let generation = rest.split('/').next().unwrap_or_default();
+            if uuid::Uuid::parse_str(generation).is_err() { return false; }
+            &rest[generation.len()..]
+        } else if let Some(rest) = key.strip_prefix("api-source/") {
+            let Some((source, remaining)) = rest.split_once('/') else { return false; };
+            if uuid::Uuid::parse_str(source).is_err() { return false; }
+            let (credential, suffix) = remaining.split_once('/').map_or((remaining, ""), |(head, _)| (head, &remaining[head.len()..]));
+            let Some((revision, generation)) = credential.split_once('-') else { return false; };
+            if !revision.parse::<u64>().is_ok_and(|n| n > 0) || uuid::Uuid::parse_str(generation).is_err() { return false; }
+            suffix
         } else { return false; };
     if rest.is_empty() { return true; }
     let Some((generation, part)) = rest.strip_prefix('/').and_then(|s| s.split_once('/')) else { return false; };
@@ -19,6 +30,8 @@ pub fn remove_app_credentials() -> Result<()> {
     // Win32 supports prefix filters only, followed by a literal service check.
     // https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credenumeratew
     remove_matching("account/*", owned_target)?;
+    remove_matching("api-source/*", owned_target)?;
+    remove_matching("network/subscription/*", owned_target)?;
     remove_matching("gateway-key*", owned_target)
 }
 #[cfg(windows)]
@@ -60,6 +73,13 @@ mod tests {
         assert!(owned_target(&account));
         assert!(owned_target("gateway-key.PersonalCodexPool"));
         assert!(owned_target("gateway-key/03ab09f0-eebd-4de2-9697-506e947e6ffc/0.PersonalCodexPool"));
+        let source = "api-source/03ab09f0-eebd-4de2-9697-506e947e6ffc/1-03ab09f0-eebd-4de2-9697-506e947e6ffc";
+        assert!(owned_target(&format!("{source}.PersonalCodexPool")));
+        assert!(owned_target(&format!("{source}/03ab09f0-eebd-4de2-9697-506e947e6ffc/0.PersonalCodexPool")));
+        assert!(!owned_target("api-source/not-a-source/1-invalid.PersonalCodexPool"));
+        assert!(owned_target("network/subscription/03ab09f0-eebd-4de2-9697-506e947e6ffc.PersonalCodexPool"));
+        assert!(owned_target("network/subscription/03ab09f0-eebd-4de2-9697-506e947e6ffc/03ab09f0-eebd-4de2-9697-506e947e6ffc/0.PersonalCodexPool"));
+        assert!(!owned_target("network/subscription/invalid.PersonalCodexPool"));
         for target in ["other.PersonalCodexPool", "gateway-key.OtherTool", "gateway-key.PersonalCodexPool.extra", "account/short.PersonalCodexPool", "gateway-key/bad/0.PersonalCodexPool", "gateway-key/03ab09f0-eebd-4de2-9697-506e947e6ffc/128.PersonalCodexPool"] { assert!(!owned_target(target)); }
     }
     #[cfg(windows)]

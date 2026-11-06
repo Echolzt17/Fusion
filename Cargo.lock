@@ -2772,9 +2772,11 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "personal-codex-pool"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
+ "dom_query",
  "fusion-report-protocol",
  "minisign-verify",
  "pool-core",
@@ -2782,6 +2784,8 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
@@ -2912,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "pool-core"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "async-stream",
  "axum",
@@ -2930,6 +2934,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2",
  "subtle",
  "tempfile",
@@ -3722,6 +3727,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_yaml_ng"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4db627b98b36d4203a7b458cf3573730f2bb591b28871d916dfa9efabfd41f"
+dependencies = [
+ "indexmap 2.14.2",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -4807,6 +4825,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

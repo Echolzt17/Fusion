@@ -29,7 +29,11 @@ pub fn prepare(logs: &[RequestLog], installation_id: &str, environment: Environm
                 upstream_status: d.and_then(|d| d.upstream_status),
                 failure_stage: d.and_then(|d| d.failure_stage).and_then(|s| category(&s)).filter(|s| fusion_report_protocol::STAGES.contains(&s.as_str())),
                 network_error_kind: d.and_then(|d| d.network_error_kind).and_then(|s| category(&s)),
-                proxy_source: d.and_then(|d| category(&d.proxy_source)),
+                // Keep the existing server's finite schema compatible. Managed
+                // node identities never enter an error report.
+                proxy_source: d.and_then(|d| category(&d.proxy_source)).map(|s| {
+                    if fusion_report_protocol::PROXIES.contains(&s.as_str()) { s } else { "unknown".into() }
+                }),
                 execution: d.and_then(|d| d.execution.clone()),
                 details: d.map(|d| {
                     let mut details=d.details.clone().unwrap_or_default();

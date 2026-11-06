@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PoolWidget } from './PoolWidget';
+import { ConversationHandoff } from './ConversationHandoff';
 import { ActiveRequests, type ActiveRequest } from './ActiveRequests';
 import { Modal } from './Modal';
 import { NotificationCenter, useNotifications } from './NotificationCenter';
@@ -24,6 +25,9 @@ import { LaunchButton } from './LaunchButton';
 import { SubscriptionCountdown } from './SubscriptionCountdown';
 import { ErrorReport } from './ErrorReport';
 import { UsageDashboard, type DashboardUsage } from './UsageDashboard';
+import { NetworkCards } from './NetworkCards';
+import { PricingCards, usePricing } from './PricingCards';
+import { ClientSwitcher, SourceModeSwitcher, ApiWorkspace, ClaudeOfficialWorkspace, type ClientId, type SourceMode, type ClientStatus } from './ClientWorkspace';
 
 type ResetCredits = { available_count: number; credits: { id: string; reset_type: string; status: string; expires_at: string | null }[] };
 type Settings = { port: number; concurrency: number; fixedAccount: string | null; selectionPolicy: SelectionPolicy };
@@ -52,20 +56,19 @@ function Quota({ data, fallback, stale }: { data?: WindowQuota; fallback: string
     <div className="quota-reset"><span>重置</span>{data?.reset_at ? <time dateTime={new Date(data.reset_at * 1000).toISOString()} title={date(data.reset_at)}>{new Date(data.reset_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</time> : <span>时间未提供</span>}</div>
   </div>;
 }
-function ConversationGuide() {
-  return <div className="conversation-guide" aria-label="聊天续接说明">
-    <p>首选账号只影响新会话；已有聊天始终使用原账号。</p>
-    <p>继续池内旧聊天：保留原账号和有效绑定，重新启动账号池后继续。</p>
-    <p>关闭只恢复启用前的接入。使用官方接入时，请手动打开 Codex，新建聊天并带入任务摘要；池内上下文不会自动迁移。</p>
-  </div>;
-}
 function App() {
+  const pricing = usePricing();
   const notifications = useNotifications();
   const inbox = notifications.store;
   const notify = useCallback((notice: { text: string; error: boolean }) => inbox.push({ title: notice.error ? '操作未完成' : notice.text.split(/[。；\n]/)[0].slice(0, 40), message: notice.text, level: notice.error ? 'error' : 'success' }), [inbox]);
   const [dark, setDark] = useState(() => { try { const saved = localStorage.getItem('pool-theme'); return saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; } });
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; try { localStorage.setItem('pool-theme', dark ? 'dark' : 'light'); } catch {} }, [dark]);
   const [page, setPage] = useState<'accounts' | 'service' | 'logs'>('accounts');
+  const [client, setClient] = useState<ClientId>('codex');
+  const [sourceModes, setSourceModes] = useState<Record<ClientId, SourceMode>>({ codex: 'subscription', claudeCode: 'api' });
+  const [apiStatuses, setApiStatuses] = useState<ClientStatus[]>([]);
+  const sourceMode = sourceModes[client];
+  const showPool = client === 'codex' && sourceMode === 'subscription';
   const pageRef = useRef(page); pageRef.current = page;
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [settings, setSettings] = useState<Settings>({ port: 18765, concurrency: 4, fixedAccount: null, selectionPolicy: 'auto' });
@@ -163,6 +166,7 @@ function App() {
       ...(pageRef.current === 'accounts' ? [{ name: '用量', read: () => invoke<Usage[]>('usage'), update: setUsage }] : []),
       ...(pageRef.current === 'accounts' ? [{ name: '本机用量', read: () => invoke<DashboardUsage>('usage_dashboard'), update: setDashboardUsage }] : []),
       { name: '账号池接入', read: () => invoke<Connection>('connection_status'), update: setConnection },
+      { name: 'API连接', read: () => invoke<ClientStatus[]>('api_client_status'), update: value => setApiStatuses(Array.isArray(value) ? value : []) },
       { name: '调度', read: () => invoke<SchedulingStatus>('scheduling_status'), update: s => { if (revision === schedulingRevision.current) setScheduling(s); } },
       { name: '生图兼容性', read: () => invoke<ImageCompatibility>('image_compatibility'), update: setImageCompatibility },
     ]);
@@ -251,7 +255,9 @@ function App() {
 
   const measured = usage.reduce((s, u) => s + u.measuredRequests, 0);
   const requests = usage.reduce((s, u) => s + u.requests, 0);
-  const activeLabel = page === 'accounts' ? '账号控制台' : page === 'service' ? '连接与设置' : '请求日志';
+  const activeLabel = page === 'accounts' ? (showPool ? '账号控制台' : '账号与来源') : page === 'service' ? '连接与设置' : '请求日志';
+  const apiStatus = apiStatuses.find(status => status.client === client && status.mode !== 'off');
+  const apiStateNames = { starting: 'API 正在启动', running: 'API 运行中', stopping: 'API 正在关闭', recoveryRequired: 'API 接入需要恢复', failed: 'API 操作未完成', off: 'API 已关闭' };
   return <div className="app">
     <WindowChrome />
     <aside>
@@ -259,12 +265,16 @@ function App() {
       <div className="sidebar-bottom"><RepositoryButton controller={updates} /></div>
     </aside>
     <main>
-      <header><div><h1>{activeLabel}</h1></div><div className="header-actions"><UpdateButton controller={updates} /><NotificationCenter {...notifications} /><ThemeSwitch dark={dark} onChange={() => setDark(v => !v)} /><span className="local-tag"><span className={'dot ' + (service.running ? 'on' : '')} />{poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '正在启动账号池' : connection.mode === 'closing' ? '正在关闭账号池' : connection.mode === 'recovery_required' ? '接入需要恢复' : connection.mode === 'off' ? '账号池已关闭' : '正在读取接入状态'}</span></div></header>
+      <header><div><h1>{activeLabel}</h1></div><div className="header-actions"><UpdateButton controller={updates} /><NotificationCenter {...notifications} /><ThemeSwitch dark={dark} onChange={() => setDark(v => !v)} /><span className="local-tag"><span className={'dot ' + (apiStatus?.mode === 'running' || client === 'codex' && service.running ? 'on' : '')} />{apiStatus ? apiStateNames[apiStatus.mode] : client === 'claudeCode' ? 'Claude Code API 已关闭' : poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '正在启动账号池' : connection.mode === 'closing' ? '正在关闭账号池' : connection.mode === 'recovery_required' ? '接入需要恢复' : connection.mode === 'off' ? '账号池已关闭' : '正在读取接入状态'}</span></div></header>
       {(shutdown || transitioning) && <section role="status" aria-live="polite" className="shutdown-progress"><h2>{shutdown === 'exit' ? '正在退出 Fusion' : connection.mode === 'enabling' ? '正在启动账号池' : '正在关闭账号池'}</h2><p>{phaseLabel[connection.phase || ''] || '正在准备切换…'} · 活动请求 {service.activeRequests} 个 · 已等待 {connection.operationStartedAt ? Math.max(0, Math.floor(clock / 1000 - connection.operationStartedAt)) : 0} 秒</p></section>}
       {failed && <section role="alert"><h2>{retryStart ? '启动未完成' : '关闭未完成'}</h2><p>{startError || connection.error || '客户端切换尚未完成，请重试。'}</p>{retryStart && (connection.configured || connection.recoveryPending || poolOn) && <button disabled={busy || transitioning} onClick={() => void run(() => openShutdown('stop'))}>关闭账号池</button>}</section>}
-      {page === 'accounts' && <div className="accounts-page"><div className="dashboard-summary">
+      <ClientSwitcher value={client} onChange={setClient} />
+      <SourceModeSwitcher client={client} value={sourceMode} onChange={mode => setSourceModes(previous => ({ ...previous, [client]: mode }))} />
+      {apiStatus && <div className="conversation-guide" role="status">{client === 'codex' ? 'Codex' : 'Claude Code'} 当前接入：{apiStateNames[apiStatus.mode]}{apiStatus.error ? ` · ${apiStatus.error}` : ''}{showPool ? '。启动账号池将等待当前 API 请求完成并切换接入。' : ''}</div>}
+      {sourceMode === 'api' && <ApiWorkspace key={client} client={client} page={page} poolMode={poolOn} poolBusy={updating} onSwitchToPool={() => setSourceModes(previous => ({ ...previous, codex: 'subscription' }))} />}
+      {client === 'claudeCode' && sourceMode === 'subscription' && <ClaudeOfficialWorkspace page={page} />}
+      {showPool && page === 'accounts' && <div className="accounts-page"><div className="dashboard-summary">
         <section className="launch-panel"><div className="launch-copy"><h2>{poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '账号池启动中' : connection.mode === 'closing' ? '账号池关闭中' : connection.mode === 'recovery_required' ? '账号池需要恢复' : '账号池未启动'}</h2><div className="button-row"><LaunchButton label={poolActionLabel} running={poolOn} transitioning={transitioning} failed={failed} disabled={poolActionDisabled} aria-describedby={activationBlocked ? 'launch-blocked' : undefined} onClick={() => void run(poolAction)} /></div>{activationBlocked && <p id="launch-blocked" role="status">{activationBlocked}</p>}</div><PoolPrinter running={poolOn} /></section>
-        <ConversationGuide />
         <div className="overview-line"><span>可用账号 <b>{available} / {accounts.length}</b></span><span>{scheduling.preferredAccountId ? '手动优先' : '策略分配'}</span><span>用量已上报 <b>{num(measured)} / {num(requests)}</b> 次请求</span></div>
         </div><div className="dashboard-grid"><UsageDashboard data={dashboardUsage} onDetails={() => setPage('logs')} />
         </div>
@@ -286,7 +296,7 @@ function App() {
         })}</div>}
         <div className="footnote">{scheduling.preferredAccountId && <button className="text-button" disabled={busy} onClick={() => void run(async () => { await invoke('select_account', { accountId: null }); schedulingRevision.current++; setSettings(await invoke<Settings>('settings')); }, '已切换为自动优先，已有会话保持原账号')}>切换为自动优先</button>}</div>
       </div></div>}
-      {page === 'service' && <div className="service-grid">
+      {showPool && page === 'service' && <div className="service-grid">
         <section><div className="section-head"><h2>原生生图</h2><span className="badge neutral">桌面验收待完成</span></div>
           <p role="status">{imageCompatibility?.detail || '启动时自动检查客户端兼容性，无需手动修改配置'}</p>
           <p className="subtle">桌面 {imageCompatibility?.client.desktop || '未检测到'} · {imageCompatibility?.client.engine || '请打开 Codex 桌面版'}</p>
@@ -294,12 +304,14 @@ function App() {
           <p>{imageCompatibility?.upstreamImageReceived ? '上游已返回图片；Codex 展示、保存及多轮改图仍待真实验收。' : '真实生图待验收；模型目录连通不代表生图可用。'}</p>
           <p className="hint">生成后继续修改保持原会话账号。取消、断网或超时均不会自动重放；上游任务是否停止无法保证。</p>
         </section>
-        <section><div className="section-head"><h2>Codex 接入</h2><span className={'badge ' + (!poolOn ? 'neutral' : '')}>{poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '启动中' : connection.mode === 'closing' ? '关闭中' : connection.mode === 'recovery_required' ? '需要恢复' : '账号池未启动'}</span></div><p>{poolOn ? '新会话使用账号池接入；已有会话保持原账号。' : '启动后自动配置并打开 Codex；关闭后恢复原接入并保持 Codex 关闭。'}</p><ConversationGuide /><p className="subtle">桌面小胶囊：{poolOn ? '显示在 Codex 窗口内，可拖动并点击展开' : '账号池启用后显示'}</p><div className="button-row"><ActionButton kind={poolOn ? 'reset' : 'start'} disabled={poolActionDisabled} aria-describedby={activationBlocked ? 'service-blocked' : undefined} onClick={() => void run(poolAction)}>{poolActionLabel}</ActionButton><button disabled={busy || !poolOn} onClick={() => void run(async () => notify({ text: await probe(), error: false }))}>检查连接</button></div>{activationBlocked && <p id="service-blocked" role="status">{activationBlocked}</p>}<p className="subtle">本机接口 {service.baseUrl} · 活动请求 {service.activeRequests}</p></section>
         <section><div className="section-head"><div><h2>服务设置</h2></div></div><div className="fields"><label>监听端口<input type="number" min="1" max="65535" disabled={connection.mode !== 'off' || busy} value={settings.port} onChange={e => setSettings({ ...settings, port: Number(e.target.value) })} /></label><label>单账号并发<input type="number" min="1" max="16" disabled={connection.mode !== 'off' || busy} value={settings.concurrency} onChange={e => setSettings({ ...settings, concurrency: Number(e.target.value) })} /></label><div className="priority-setting"><span>账号优先规则</span><PrioritySelector value={scheduling.policy} disabled={busy} onChange={changePolicy} /></div></div><button disabled={busy || connection.mode !== 'off'} onClick={() => void run(() => invoke('save_settings', { settings }), '设置已保存')}>保存设置</button></section>
+        <PricingCards data={pricing} />
+        <NetworkCards poolRunning={poolOn} onError={message => notify({ text: message, error: true })} onNotice={message => notify({ text: message, error: false })} />
       </div>}
-      <ActiveRequests requests={service.requests ?? []} accounts={accounts} onChanged={() => { reader.current!.invalidate(); refresh(); }} />
-      <section hidden={page !== 'logs'}><div className="section-head"><h2>请求记录</h2><ErrorReport disabled={busy} notify={notify}/></div>
-        <RequestRecords accounts={accounts} index={historyIndex} indexError={!!readState['对话统计']?.error} revision={logs} active={page==='logs'}/>
+      {showPool && page === 'accounts' && <ConversationHandoff mode={connection.mode} accounts={accounts} disabled={busy} />}
+      {showPool && <ActiveRequests requests={service.requests ?? []} accounts={accounts} onChanged={() => { reader.current!.invalidate(); refresh(); }} />}
+      <section hidden={page !== 'logs' || !showPool}><div className="section-head"><h2>请求记录</h2><ErrorReport disabled={busy} notify={notify}/></div>
+        <RequestRecords accounts={accounts} index={historyIndex} indexError={!!readState['对话统计']?.error} revision={logs} active={page==='logs' && showPool}/>
 
       </section>
     </main>

@@ -9,6 +9,8 @@
     "allow-widget-snapshot",
     "allow-widget-set-expanded",
     "allow-widget-drag",
-    "allow-widget-open-console"
+    "allow-widget-open-console",
+    "allow-widget-ready",
+    "allow-widget-input-ack"
   ]
 }

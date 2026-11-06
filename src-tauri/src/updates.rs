@@ -20,6 +20,9 @@ const REPOSITORY: &str = "https://github.com/Echolzt17/Fusion";
 const MAX_PACKAGE: u64 = 512 * 1024 * 1024;
 const PERIOD: Duration = Duration::from_secs(6 * 60 * 60);
 const STABLE_FEED: &str = "https://raw.githubusercontent.com/Echolzt17/Fusion/main/updates/stable.json";
+mod transport;
+#[cfg(test)]
+use transport::download_to_file;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -91,6 +94,9 @@ impl Updates {
             .try_read_owned()
             .map_err(|_| "正在安全更新，请稍后再操作".into())
     }
+    pub async fn freeze_work(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.work.clone().write_owned().await
+    }
     fn phase(&self, phase: &'static str) {
         let mut status = self.status.lock().unwrap();
         status.phase = phase;
@@ -113,28 +119,7 @@ impl Updates {
             .ok_or("更新清单不可用".into())
     }
     async fn manifest(&self, url: &str) -> Result<Value> {
-        let mut response = client()?
-            .get(transport_url(url)?)
-            .timeout(Duration::from_secs(45))
-            .send()
-            .await
-            .map_err(|_| "无法连接 GitHub 更新服务；当前版本可继续使用")?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err("尚未发布此版本的稳定更新清单；当前版本可继续使用".into());
-        }
-        if !response.status().is_success() {
-            return Err("GitHub 更新服务暂不可用；请稍后重试".into());
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "更新清单下载中断")? {
-            if bytes.len() + chunk.len() > 64 * 1024 {
-                return Err("更新清单超过允许大小".into());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        let manifest: Value = serde_json::from_slice(&bytes).map_err(|_| "更新清单格式错误")?;
-        validate_manifest(&manifest)?;
-        Ok(manifest)
+        transport::manifest(&client()?, &transport_url(url)?).await
     }
     fn package_dir(&self, manifest: &Value) -> PathBuf {
         self.root.join(manifest["version"].as_str().unwrap())
@@ -163,17 +148,7 @@ impl Updates {
                 return Ok(path);
             }
         }
-        let response = tokio::time::timeout(Duration::from_secs(45), client()?
-            .get(transport_url(update.download_url.as_str())?)
-            .timeout(Duration::from_secs(30 * 60))
-            .send())
-            .await
-            .map_err(|_| "更新服务长时间未响应，可稍后重试")?
-            .map_err(|_| "更新包下载失败；请检查 GitHub 网络连接")?;
-        if !response.status().is_success() {
-            return Err("更新包下载被拒绝或文件尚未发布".into());
-        }
-        let temporary = download_to_file(response, &directory, |downloaded, total| {
+        let temporary = transport::package(&client()?, &transport_url(update.download_url.as_str())?, &directory, |downloaded, total| {
             if progress {
                 let mut state = self.status.lock().unwrap();
                 state.downloaded = downloaded;
@@ -510,38 +485,6 @@ fn read_package(path: &Path) -> Result<Vec<u8>> {
     }
     std::fs::read(path).map_err(|_| "更新包读取失败".into())
 }
-async fn download_to_file(
-    mut response: reqwest::Response,
-    directory: &Path,
-    mut progress: impl FnMut(u64, Option<u64>),
-) -> Result<tempfile::NamedTempFile> {
-    let total = response.content_length();
-    if total.is_some_and(|n| n > MAX_PACKAGE) {
-        return Err("更新包超过允许大小".into());
-    }
-    let mut temporary = tempfile::NamedTempFile::new_in(directory)
-        .map_err(|_| "无法创建更新缓存，请检查磁盘空间和权限")?;
-    let mut downloaded = 0;
-    progress(downloaded, total);
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "更新包下载中断，可稍后重试")?
-    {
-        downloaded += chunk.len() as u64;
-        if downloaded > MAX_PACKAGE {
-            return Err("更新包超过允许大小".into());
-        }
-        std::io::Write::write_all(&mut temporary, &chunk)
-            .map_err(|_| "更新包保存失败，请检查磁盘空间和权限")?;
-        progress(downloaded, total);
-    }
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|_| "更新包写入磁盘失败")?;
-    Ok(temporary)
-}
 /// Read-only release validation, before Store/Vault/Tauri initialization.
 pub fn verify_release(manifest_path: &Path, package: &Path) -> Result<()> {
     let bytes = std::fs::read(manifest_path).map_err(|_| "无法读取发布清单")?;
@@ -737,6 +680,7 @@ async fn install(app: &tauri::AppHandle, updates: &Updates, manifest: Value, mut
     if !updates.begin_install(&mut cancel) { return Ok(()); }
     updates.phase("finalizing");
     if a.oauth.active() { return Err("请先完成或取消浏览器登录，再重试更新".into()); }
+    let _network_checks = a.network.pause_background_checks();
     let _work = updates.work.clone().write_owned().await;
     if a.oauth.active() { return Err("请先完成或取消浏览器登录，再重试更新".into()); }
     let fresh = updates.manifest(STABLE_FEED).await?;
@@ -754,12 +698,17 @@ async fn install(app: &tauri::AppHandle, updates: &Updates, manifest: Value, mut
     }).await?;
     ensure_install_space(&directory)?;
     updates.phase("closing");
+    a.api_clients.stop_all().await?;
     let (connection, progress, store) = (a.connection.clone(), a.connection.clone(), a.accounts.store.clone());
     close_for_update(&connection, move || {
         codex_lifecycle::stop_client(&store, |phase| progress.set_phase(phase)).map(|_| ())
     }).await?;
     updates.phase("finishing");
     a.accounts.wait_background_idle().await?;
+    a.network.shutdown().await?;
+    if !pool_core::api_config::detached(&config::codex_config_path()?)? {
+        return Err("Codex API 接入仍依赖 Fusion，更新已停止".into());
+    }
     if !config::detached(&config::codex_config_path()?, &std::env::current_exe().map_err(|_| "找不到程序路径")?, a.accounts.store.settings()?.port)? {
         return Err("Codex 仍依赖 Fusion，更新已停止".into());
     }

@@ -189,7 +189,8 @@ impl Accounts {
         if old.expires_at > now() + 300 {
             return Ok(old);
         }
-        let r = self.http.post(&self.token_endpoint).await?.timeout(std::time::Duration::from_secs(30))
+        let (request, _route_lease) = self.http.pool_post(&self.token_endpoint).await?;
+        let r = request.timeout(std::time::Duration::from_secs(30))
             .json(&json!({"client_id":CLIENT_ID,"grant_type":"refresh_token","refresh_token":old.refresh_token})).send().await.map_err(|_| "授权续期网络失败，请检查网络后再试")?;
         if !r.status().is_success() {
             if r.status().as_u16() == 400 || r.status().as_u16() == 401 {

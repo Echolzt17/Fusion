@@ -1,5 +1,9 @@
 # 来源与第三方说明
 
+## 内置专用网络内核
+
+随包分发未经修改的 MetaCubeX/mihomo v1.19.33 Windows amd64-compatible 独立可执行文件，许可证为 GNU GPL v3；许可全文随 `network-kernel/LICENSE` 及生成的第三方许可材料交付。固定版本、官方分发来源、归档及可执行文件摘要见 `resources/network-kernel/manifest.json`。对应源码：https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.33.zip 。Fusion 通过本机代理及控制接口与独立进程通信，没有把内核源码复制或链接到 Rust 模块，也不修改其二进制；独立进程形式不免除该内核的分发许可要求。内核不从运行时配置指定位置下载或自行升级。
+
 本工具的账号授权协议和 Codex 原生转发行为参考：
 
 - 项目：Cockpit Tools

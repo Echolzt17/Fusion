@@ -162,6 +162,7 @@ fn message_is(error: &dyn std::fmt::Display, expected: &str) -> bool {
 #[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxySource {
+    ManagedKernel,
     EnvironmentConfigured,
     WindowsStaticConfigured,
     WindowsAutomaticConfigured,

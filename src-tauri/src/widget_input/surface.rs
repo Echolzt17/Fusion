@@ -2,7 +2,7 @@
 //! focus afterwards is too late to preserve a foreign Chromium/TSF text store.
 use crate::{codex_window::{self, Host}, Result};
 use serde::Serialize;
-use std::sync::{Arc, OnceLock};
+use std::{cell::Cell, sync::{Arc, OnceLock}};
 use super::trace::{self, Trace};
 use windows::{core::w, Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -24,6 +24,8 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PointerAction {
+    pub sequence: u64,
+    pub gesture: u64,
     pub kind: &'static str,
     pub x: f64,
     pub y: f64,
@@ -33,15 +35,28 @@ struct Surface {
     host: Host,
     action: Box<dyn Fn(PointerAction) -> bool>,
     trace: Arc<Trace>,
+    enabled: Cell<bool>,
+    sequence: Cell<u64>,
+    gesture: Cell<u64>,
+    pressed: Cell<bool>,
 }
 impl Surface {
-    fn dispatch(&self, action: PointerAction) {
+    fn dispatch(&self, mut action: PointerAction) {
+        self.sequence.set(self.sequence.get().saturating_add(1));
+        action.sequence = self.sequence.get();
+        action.gesture = self.gesture.get();
         self.trace.dispatched(action.kind);
+        self.trace.sent(action.sequence);
         self.trace.bridge((self.action)(action));
     }
     fn forward(&self, action: PointerAction, host_foreground: bool) {
         self.trace.native(action.kind);
-        if host_foreground { self.dispatch(action); } else { self.trace.rejected(); }
+        if host_foreground && self.enabled.get() { self.dispatch(action); } else { self.trace.rejected(); }
+    }
+    fn cancel(&self) {
+        if self.pressed.replace(false) {
+            self.dispatch(PointerAction { sequence: 0, gesture: 0, kind: "cancel", x: 0., y: 0., delta: 0. });
+        }
     }
 }
 
@@ -61,7 +76,7 @@ pub(super) fn install(parent: HWND, host: Host, action: impl Fn(PointerAction) -
             WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, Some(parent), None, Some(instance), None)
             .map_err(|_| "无法创建挂件的非激活鼠标层".to_owned())?;
         let trace = Trace::new();
-        let data = Box::into_raw(Box::new(Surface { host, action: Box::new(action), trace: trace.clone() }));
+        let data = Box::into_raw(Box::new(Surface { host, action: Box::new(action), trace: trace.clone(), enabled: Cell::new(true), sequence: Cell::new(0), gesture: Cell::new(0), pressed: Cell::new(false) }));
         if !SetWindowSubclass(surface, Some(procedure), SUBCLASS, data as usize).as_bool() {
             drop(Box::from_raw(data));
             let _ = DestroyWindow(surface);
@@ -79,8 +94,30 @@ pub(super) fn resize(surface: HWND, parent: HWND) -> Result<()> {
     unsafe {
         let mut rect = RECT::default();
         GetClientRect(parent, &mut rect).map_err(|_| "无法读取挂件鼠标区域")?;
-        SetWindowPos(surface, Some(HWND_TOP), 0, 0, rect.right, rect.bottom,
-            SWP_NOACTIVATE).map_err(|_| "无法更新挂件鼠标区域".into())
+        if !IsWindow(Some(surface)).as_bool() || GetParent(surface).ok() != Some(parent) { return Err("挂件鼠标保护层已失效".into()); }
+        let mut actual = RECT::default();
+        GetClientRect(surface, &mut actual).map_err(|_| "无法读取鼠标保护层")?;
+        if actual != rect || GetWindow(parent, GW_CHILD).ok() != Some(surface) {
+            SetWindowPos(surface, Some(HWND_TOP), 0, 0, rect.right, rect.bottom, SWP_NOACTIVATE)
+                .map_err(|_| "无法更新挂件鼠标区域".to_owned())?;
+        }
+        Ok(())
+    }
+}
+pub(super) fn ready(window: HWND, enabled: bool) -> Result<()> {
+    unsafe {
+        let mut data = 0;
+        if !windows::Win32::UI::Shell::GetWindowSubclass(window, Some(procedure), SUBCLASS, Some(&mut data)).as_bool() || data == 0 { return Err("挂件鼠标保护层已失效".into()); }
+        let surface = &*(data as *const Surface);
+        if !enabled {
+            surface.cancel();
+            // Navigation/hiding invalidates the old gesture. Its deliberately
+            // discarded cancellation must not look like a stuck new page.
+            surface.trace.reset_pending();
+            if GetCapture() == window { let _ = ReleaseCapture(); }
+        }
+        surface.enabled.set(enabled);
+        Ok(())
     }
 }
 fn point(lparam: LPARAM, scale: f64) -> (f64, f64) {
@@ -94,8 +131,12 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
         WM_ERASEBKGND => return LRESULT(1),
         WM_CAPTURECHANGED => {
             surface.trace.capture_changed();
-            surface.dispatch(PointerAction { kind: "cancel", x: 0., y: 0., delta: 0. });
+            surface.cancel();
             return LRESULT(0);
+        }
+        WM_CANCELMODE | WM_SHOWWINDOW if message == WM_CANCELMODE || wparam.0 == 0 => {
+            surface.cancel();
+            if GetCapture() == window { let _ = ReleaseCapture(); }
         }
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
@@ -104,10 +145,18 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
             return LRESULT(0);
         }
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+            let foreground = codex_window::host_foreground(surface.host) && surface.enabled.get();
+            if !foreground {
+                surface.cancel();
+                if GetCapture() == window { let _ = ReleaseCapture(); }
+                surface.trace.native(if message == WM_LBUTTONDOWN { "down" } else if message == WM_LBUTTONUP { "up" } else { "wheel" });
+                surface.trace.rejected();
+                return LRESULT(0);
+            }
             let scale = GetDpiForWindow(window).max(96) as f64 / 96.;
             let (mut x, mut y) = point(lparam, scale);
             let kind = match message {
-                WM_LBUTTONDOWN => { SetCapture(window); "down" }
+                WM_LBUTTONDOWN => { surface.cancel(); surface.gesture.set(surface.gesture.get().saturating_add(1)); surface.pressed.set(true); SetCapture(window); "down" }
                 WM_LBUTTONUP => "up",
                 WM_MOUSEHWHEEL => "horizontalWheel",
                 _ => "wheel",
@@ -121,7 +170,9 @@ unsafe extern "system" fn procedure(window: HWND, message: u32, wparam: WPARAM, 
                 y = location.y as f64 / scale;
                 ((wparam.0 >> 16) as u16 as i16) as f64
             } else { 0. };
-            surface.forward(PointerAction { kind, x, y, delta }, codex_window::host_foreground(surface.host));
+            if message != WM_LBUTTONUP || surface.pressed.replace(false) {
+                surface.forward(PointerAction { sequence: 0, gesture: 0, kind, x, y, delta }, true);
+            }
             // Releasing capture synchronously emits WM_CAPTURECHANGED. Deliver
             // up first, otherwise cancellation would swallow every button click.
             if message == WM_LBUTTONUP && GetCapture() == window { let _ = ReleaseCapture(); }
@@ -164,13 +215,13 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let received = calls.clone();
         let surface = Surface {
-            host: Host { window: 0, pid: 0 }, trace: trace.clone(),
+            host: Host { window: 0, pid: 0 }, trace: trace.clone(), enabled: Cell::new(true), sequence: Cell::new(0), gesture: Cell::new(0), pressed: Cell::new(false),
             action: Box::new(move |event| { received.fetch_add(1, Ordering::Relaxed); event.kind != "up" }),
         };
-        surface.forward(PointerAction { kind: "down", x: 3., y: 9., delta: 0. }, false);
+        surface.forward(PointerAction { sequence: 0, gesture: 0, kind: "down", x: 3., y: 9., delta: 0. }, false);
         assert_eq!(calls.load(Ordering::Relaxed), 0, "foreground rejection must not invoke the bridge");
-        surface.forward(PointerAction { kind: "down", x: 3., y: 9., delta: 0. }, true);
-        surface.forward(PointerAction { kind: "up", x: 3., y: 9., delta: 0. }, true);
+        surface.forward(PointerAction { sequence: 0, gesture: 0, kind: "down", x: 3., y: 9., delta: 0. }, true);
+        surface.forward(PointerAction { sequence: 0, gesture: 0, kind: "up", x: 3., y: 9., delta: 0. }, true);
         assert_eq!(calls.load(Ordering::Relaxed), 2);
         let snapshot = serde_json::to_value(trace.snapshot().unwrap()).unwrap();
         assert_eq!(snapshot["nativeDown"], 2);

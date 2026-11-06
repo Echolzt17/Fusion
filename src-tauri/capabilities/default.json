@@ -4,6 +4,26 @@
     "main"
   ],
   "permissions": [
+    "allow-network-status",
+    "allow-network-import",
+    "allow-network-refresh",
+    "allow-network-remove",
+    "allow-network-save-settings",
+    "allow-network-select",
+    "allow-network-check",
+    "allow-network-set-enabled",
+    "allow-network-retry",
+    "allow-ai-pricing",
+    "allow-open-pricing-website",
+    "allow-api-sources",
+    "allow-save-api-source",
+    "allow-remove-api-source",
+    "allow-check-api-source",
+    "allow-api-client-status",
+    "allow-start-api-connection",
+    "allow-stop-api-connection",
+    "allow-api-request-logs",
+    "allow-open-claude-login",
     "allow-update-status",
     "allow-check-update",
     "allow-install-update",
@@ -49,6 +69,13 @@
     "allow-submit-error-report",
     "allow-error-report-status",
     "allow-save-error-report",
-    "allow-close-pool"
+    "allow-close-pool",
+    "allow-handoff-chats",
+    "allow-handoff-prepare",
+    "allow-handoff-create",
+    "allow-handoff-send",
+    "allow-handoff-status",
+    "allow-handoff-cancel",
+    "allow-handoff-open"
   ]
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pool-core"
-version = "1.0.9"
+version = "1.0.10"
 edition = "2021"
 
 [dependencies]
@@ -21,6 +21,7 @@ rustls = { version = "0.23", default-features = false, features = ["std"] }
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+serde_yaml_ng = "=0.10.0"
 sha2 = "0.10"
 subtle = "2"
 tempfile = "3"

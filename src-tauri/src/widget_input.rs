@@ -2,7 +2,7 @@
 mod surface;
 mod trace;
 pub use surface::PointerAction;
-pub use trace::diagnostics;
+pub use trace::{diagnostics, acknowledge, stalled};
 use crate::{codex_window::Host, Result};
 use std::mem::size_of;
 use windows::Win32::{
@@ -109,6 +109,21 @@ pub fn tests_surface(window: HWND) -> HWND {
         let mut data = 0;
         assert!(windows::Win32::UI::Shell::GetWindowSubclass(window, Some(procedure), SUBCLASS, Some(&mut data)).as_bool());
         (*(data as *const Observer)).surface
+    }
+}
+/// UI thread only. Reassert the input surface above late-created WebView HWNDs.
+pub fn maintain(window: HWND, enabled: bool) -> Result<()> {
+    unsafe {
+        let mut data = 0;
+        if !windows::Win32::UI::Shell::GetWindowSubclass(window, Some(procedure), SUBCLASS, Some(&mut data)).as_bool() || data == 0 { return Err("挂件鼠标观察层已失效".into()); }
+        let observer = &mut *(data as *mut Observer);
+        surface::resize(observer.surface, window)?;
+        if !mouse_registration().is_some_and(|device| device.hwndTarget == window) {
+            observer.previous = mouse_registration();
+            let device = RAWINPUTDEVICE { usUsagePage: 1, usUsage: 2, dwFlags: RIDEV_INPUTSINK, hwndTarget: window };
+            RegisterRawInputDevices(&[device], size_of::<RAWINPUTDEVICE>() as u32).map_err(|_| "无法恢复挂件外部点击观察")?;
+        }
+        surface::ready(observer.surface, enabled)
     }
 }
 #[cfg(test)]

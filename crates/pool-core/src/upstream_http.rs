@@ -8,6 +8,8 @@ use url::Url;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod managed_tests;
 #[cfg(windows)]
 mod windows;
 
@@ -27,6 +29,8 @@ pub struct UpstreamHttp {
     cached: Mutex<Option<(Route, Client, Client)>>,
     resolver: Resolver,
     resolving: Arc<Semaphore>,
+    managed: Mutex<Option<Arc<crate::network::Network>>>,
+    managed_cached: Mutex<Option<(String, Client, Client)>>,
 }
 impl UpstreamHttp {
     pub fn new() -> Result<Self> {
@@ -37,6 +41,8 @@ impl UpstreamHttp {
             cached: Mutex::new(None),
             resolver: Arc::new(resolve),
             resolving: Arc::new(Semaphore::new(2)),
+            managed: Mutex::new(None),
+            managed_cached: Mutex::new(None),
         })
     }
     pub async fn get(&self, endpoint: &str) -> Result<RequestBuilder> {
@@ -51,6 +57,50 @@ impl UpstreamHttp {
         endpoint: &str,
     ) -> Result<(RequestBuilder, ProxySource)> {
         self.gateway_request(method, endpoint).await.map(|(r, s, _)| (r, s))
+    }
+    /// Only the subscription pool receives this override. API-source clients
+    /// and subscription bootstrap downloads keep their explicit system route.
+    pub fn set_network(&self, network: Arc<crate::network::Network>) -> Result<()> {
+        *self.managed.lock().map_err(|_| "专用网络状态不可用")? = Some(network);
+        Ok(())
+    }
+    pub async fn pool_get(&self, endpoint: &str) -> Result<(RequestBuilder, Option<crate::network::RouteLease>)> {
+        self.pool_gateway_request(Method::GET, endpoint).await.map(|(r, _, _, lease)| (r, lease))
+    }
+    pub async fn pool_post(&self, endpoint: &str) -> Result<(RequestBuilder, Option<crate::network::RouteLease>)> {
+        self.pool_gateway_request(Method::POST, endpoint).await.map(|(r, _, _, lease)| (r, lease))
+    }
+    pub(crate) async fn pool_gateway_request(
+        &self, method: Method, endpoint: &str,
+    ) -> Result<(RequestBuilder, ProxySource, Client, Option<crate::network::RouteLease>)> {
+        let url = Url::parse(endpoint).map_err(|_| "上游地址格式错误")?;
+        if !matches!(url.scheme(), "http" | "https") { return Err("上游地址协议不受支持".into()); }
+        let mut system_lease = None;
+        if !loopback(&url) {
+            let network = self.managed.lock().map_err(|_| "专用网络状态不可用")?.clone();
+            if let Some(network) = network {
+                let (managed, fallback_lease) = network.acquire_pool().await?;
+                system_lease = fallback_lease;
+                if let Some(route) = managed {
+                    // Capture immutable per-node proxy credentials in BOTH clients.
+                    // No selector is changed beneath a request during its backoff.
+                    let mut cached = self.managed_cached.lock().map_err(|_| "专用代理客户端状态不可用")?;
+                    if !cached.as_ref().is_some_and(|(key, _, _)| key == &route.cache_key) {
+                        let proxy = reqwest::Proxy::all(&route.proxy_url).map_err(|_| INVALID_PROXY)?
+                            .basic_auth(&route.username, &route.password);
+                        let client = client_builder().proxy(proxy.clone()).pool_max_idle_per_host(0)
+                            .tcp_keepalive(Duration::from_secs(30)).build().map_err(|_| "代理客户端初始化失败")?;
+                        let retry = client_builder().proxy(proxy).pool_max_idle_per_host(0)
+                            .tcp_keepalive(Duration::from_secs(30)).connect_timeout(Duration::from_secs(10))
+                            .build().map_err(|_| "代理客户端初始化失败")?;
+                        *cached = Some((route.cache_key, client, retry));
+                    }
+                    let (_, client, retry) = cached.as_ref().ok_or("专用代理客户端不可用")?;
+                    return Ok((client.request(method, url), ProxySource::ManagedKernel, retry.clone(), Some(route.lease)));
+                }
+            }
+        }
+        self.gateway_request(method, endpoint).await.map(|(r, s, retry)| (r, s, retry, system_lease))
     }
     /// Both clients capture the same resolved route. Only the gateway may use
     /// the second client after a proven pre-dispatch connector failure.

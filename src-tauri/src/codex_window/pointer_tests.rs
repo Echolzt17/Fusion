@@ -15,6 +15,7 @@ use windows::{core::w, Win32::{
 #[allow(deprecated)]
 fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
     let interactive = std::env::var_os("FUSION_IME_INTERACTIVE").is_some();
+    let delivery = std::env::var_os("FUSION_POINTER_DELIVERY").is_some();
     let profile = tempfile::tempdir().unwrap();
     let running = Arc::new(AtomicBool::new(true));
     let stop = running.clone();
@@ -45,7 +46,7 @@ fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
         GetWindowThreadProcessId(parent, Some(&mut pid));
         let host = Host { window: parent.0 as isize, pid };
         let foreground_guard = codex_window::focus_tests::retain_foreground(host);
-        if interactive { let _ = ShowWindow(parent, SW_SHOW); let _ = SetForegroundWindow(parent); }
+        if interactive || delivery { let _ = ShowWindow(parent, SW_SHOW); let _ = SetForegroundWindow(parent); }
         let _ = SetFocus(Some(editor));
         tx.send((host, editor.0 as isize)).unwrap();
         while stop.load(Ordering::SeqCst) && IsWindow(Some(parent)).as_bool() {
@@ -69,10 +70,15 @@ fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
     let seen = focused.clone();
     let loaded = Arc::new(AtomicBool::new(false));
     let ready = loaded.clone();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let browser_actions = completed.clone();
     let view = WebviewWindowBuilder::new(&app, "pointer-probe", WebviewUrl::External("about:blank".parse().unwrap()))
         .parent_raw(host.hwnd()).inner_size(416., 320.).position(350., 200.)
         .decorations(false).transparent(true).resizable(false).skip_taskbar(true)
-        .visible(interactive).focused(false).focusable(false).data_directory(profile.path().to_owned())
+        .visible(interactive || delivery).focused(false).focusable(false).data_directory(profile.path().to_owned())
+        .on_document_title_changed(move |_, title| {
+            if let Some(count) = title.strip_prefix("fixture-actions-").and_then(|n| n.parse::<usize>().ok()) { browser_actions.store(count, Ordering::SeqCst); }
+        })
         .on_page_load(move |_, event| {
             if matches!(event.event(), tauri::webview::PageLoadEvent::Finished) { ready.store(true, Ordering::SeqCst); }
         })
@@ -94,7 +100,7 @@ fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
         }
     }).unwrap();
     view.with_webview(move |webview| unsafe {
-        webview.controller().CoreWebView2().unwrap().NavigateToString(w!("<!doctype html><html><meta charset='utf-8'><style>body{margin:0;background:#eceef3;font:18px system-ui;padding:20px}button{padding:15px;font:inherit}#panel{height:140px}</style><div id='panel'>真实输入法测试：开合后不要再点击输入框，继续拼音输入。<p>Native mouse surface / WebView2 receives no focus</p></div><button onclick=\"let p=document.querySelector('#panel');p.hidden=!p.hidden\">打开 / 关闭胶囊详情</button></html>")).unwrap();
+        webview.controller().CoreWebView2().unwrap().NavigateToString(w!("<!doctype html><html><meta charset='utf-8'><style>body{margin:0;background:#eceef3;font:18px system-ui;padding:20px}button{padding:15px;font:inherit}#panel{height:140px}</style><div id='panel'>真实输入法测试：开合后不要再点击输入框，继续拼音输入。<p>Native mouse surface / WebView2 receives no focus</p></div><button style=\"position:fixed;left:20px;top:5px;height:30px\" onclick=\"let p=document.querySelector('#panel');p.hidden=!p.hidden;document.title='fixture-actions-'+(window.__fixtureClicks=(window.__fixtureClicks||0)+1)\">打开 / 关闭胶囊详情</button></html>")).unwrap();
     }).unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
     while !loaded.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -110,6 +116,13 @@ fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
     unsafe {
         assert_eq!(codex_window::host_focus(host, Some(child)).unwrap().window, editor);
         let surface = tests_surface(child);
+        let cover = CreateWindowExW(Default::default(), w!("STATIC"), w!(""), WS_CHILD | WS_VISIBLE,
+            0, 0, 340, 40, Some(child), None, None, None).unwrap();
+        SetWindowPos(cover, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE).unwrap();
+        assert_eq!(GetWindow(child, GW_CHILD).unwrap(),cover);
+        crate::widget_input::maintain(child,true).unwrap();
+        assert_eq!(GetWindow(child, GW_CHILD).unwrap(),surface,"health maintenance must repair a late sibling covering the surface");
+        DestroyWindow(cover).unwrap();
         assert_eq!(GetWindow(child, GW_CHILD).unwrap(), surface, "mouse surface must be above the browser");
         assert_eq!(SendMessageW(surface, WM_NCHITTEST, None, Some(LPARAM(0))).0, HTCLIENT as isize);
         for (width, height) in [(340, 40), (416, 520), (340, 40)] {
@@ -124,11 +137,18 @@ fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
         }
         let activation = SendMessageW(surface, WM_MOUSEACTIVATE, Some(WPARAM(host.window as usize)), Some(LPARAM(0)));
         assert_eq!(activation.0, MA_NOACTIVATE as isize);
-        for _ in 0..12 {
-            SendMessageW(surface, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(LPARAM(40 | (40 << 16))));
-            SendMessageW(surface, WM_LBUTTONUP, Some(WPARAM(0)), Some(LPARAM(40 | (40 << 16))));
+        if delivery { assert!(codex_window::host_foreground(host), "action-delivery verification must have a real foreground fixture; zero dispatch cannot pass"); }
+        for round in 0..12 {
+            SendMessageW(surface, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(LPARAM(40 | (20 << 16))));
+            SendMessageW(surface, WM_LBUTTONUP, Some(WPARAM(0)), Some(LPARAM(40 | (20 << 16))));
             app.run_iteration(|_, _| {});
             assert_eq!(GetWindow(child, GW_CHILD).unwrap(), surface);
+            if delivery {
+                let until = Instant::now() + Duration::from_secs(2);
+                while completed.load(Ordering::SeqCst) <= round && Instant::now() < until { app.run_iteration(|_, _| {}); std::thread::sleep(Duration::from_millis(5)); }
+                if completed.load(Ordering::SeqCst) != round + 1 { eprintln!("delivery metadata: {} foreground={} nativeActions={}", crate::widget_input::tests_diagnostics(child), codex_window::host_foreground(host), actions.load(Ordering::SeqCst)); }
+                assert_eq!(completed.load(Ordering::SeqCst), round + 1, "the WebView button must actually finish its action");
+            }
         }
     }
     assert_eq!(changes.load(Ordering::SeqCst), baseline);
@@ -142,6 +162,11 @@ fn actual_pointer_surface_keeps_foreign_thread_editor_focus() {
     let dispatched = pointer_trace["dispatchedDown"].as_u64().unwrap()
         + pointer_trace["dispatchedUp"].as_u64().unwrap();
     assert_eq!(dispatched + pointer_trace["foregroundRejected"].as_u64().unwrap(), 24);
+    if delivery {
+        assert_eq!(dispatched, 24);
+        assert_eq!(completed.load(Ordering::SeqCst), 12);
+        assert_eq!(actions.load(Ordering::SeqCst), 24);
+    }
     eprintln!("isolated pointer metadata: {pointer_trace}");
     if interactive {
         view.set_size(tauri::LogicalSize::new(416., 320.)).unwrap();

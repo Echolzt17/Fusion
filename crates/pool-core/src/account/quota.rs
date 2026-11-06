@@ -113,7 +113,8 @@ impl Accounts {
             if !self.owns_quota_refresh(id, flight) { return Err("账号已移除，已取消旧额度查询".into()); }
             let t = self.token(id).await?;
             let account = self.store.account(id)?;
-            let response = self.http.get(&self.quota_endpoint).await?
+            let (request, _route_lease) = self.http.pool_get(&self.quota_endpoint).await?;
+            let response = request
                 .bearer_auth(&t.access_token)
                 .header("ChatGPT-Account-ID", &account.account_id)
                 .timeout(Duration::from_secs(20))

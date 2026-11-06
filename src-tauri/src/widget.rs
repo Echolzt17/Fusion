@@ -17,7 +17,18 @@ struct Anchor {
     x: i32,
     y: i32,
 }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Control {
+    instance: String,
+    revision: u64,
+    expanded: bool,
+    ready: bool,
+}
 struct State {
+    instance: String,
+    generation: u64,
+    ready: bool,
     expanded: bool,
     transition: u64,
     warning: Option<String>,
@@ -38,6 +49,9 @@ pub fn setup(app: &tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
         .get("widget_position_codex")?
         .and_then(|s| serde_json::from_str(&s).ok());
     app.manage(Widget(Mutex::new(State {
+        instance: uuid::Uuid::new_v4().to_string(),
+        generation: 0,
+        ready: false,
         expanded: false,
         transition: 0,
         warning: None,
@@ -113,7 +127,7 @@ pub fn setup(app: &tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
                 let Ok(mut s) = state.0.lock() else {
                     continue;
                 };
-                let shown = on && area.is_some();
+                let shown = on && area.is_some() && s.ready;
                 let mut changed = created || s.shown != shown || s.host != host || s.area != area;
                 s.shown = shown;
                 s.host = host;
@@ -139,7 +153,8 @@ pub fn setup(app: &tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
                         save = s.anchor;
                     }
                 }
-                if !shown {
+                if !shown && s.expanded {
+                    s.transition = s.transition.saturating_add(1);
                     s.expanded = false;
                 }
                 (changed, s.expanded, save)
@@ -156,7 +171,7 @@ pub fn setup(app: &tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
                             w.show().map_err(|_| "无法显示挂件".to_owned())?;
                             if let Some(host) = host { codex_window::raise_child(w.hwnd().map_err(|_| "挂件窗口不可用")?, host)?; }
                         Ok(())
-                    }) } else { let _=w.emit("widget-expanded",false); w.hide().map_err(|_| "无法隐藏挂件".to_owned()) };
+                    }) } else { let _=w.emit("widget-expanded", control(&handle).ok()); w.hide().map_err(|_| "无法隐藏挂件".to_owned()) };
                     match result {
                         Ok(()) => set_warning(&handle, None),
                         Err(error) => { if let Ok(mut s) = state.0.lock() { s.shown = false; } set_warning(&handle, Some(error)); }
@@ -164,6 +179,20 @@ pub fn setup(app: &tauri::App) -> std::result::Result<(), Box<dyn std::error::Er
                 }
             }
             if refresh_layer && on && area.is_some() {
+                if state.0.lock().is_ok_and(|s| s.ready) && crate::widget_input::stalled() {
+                    set_warning(&handle, Some("挂件交互回执中断，正在重建交互窗口；未补发点击".into()));
+                    if let Some(w) = handle.get_webview_window(LABEL) { let _ = w.destroy(); }
+                    continue;
+                }
+                if let Some(w) = handle.get_webview_window(LABEL) {
+                    let window = w.clone();
+                    let ready = state.0.lock().is_ok_and(|s| s.ready);
+                    if let Err(error) = on_ui_thread(handle.clone(), move |_| crate::widget_input::maintain(window.hwnd().map_err(|_| "挂件窗口不可用")?, ready)).await {
+                        set_warning(&handle, Some(error));
+                        let _ = w.destroy();
+                        continue;
+                    }
+                }
                 if let (Some(w),Some(host))=(handle.get_webview_window(LABEL),host) {
                     if let Ok(hwnd) = w.hwnd() {
                         if let Err(error) = codex_window::raise_child(hwnd, host) { set_warning(&handle, Some(error)); }
@@ -197,6 +226,14 @@ fn set_warning(app: &tauri::AppHandle, error: Option<String>) {
     let _ = app.emit_to("main", "desktop-warning", error);
 }
 async fn create_child(app: &tauri::AppHandle, host: Host) -> Result<()> {
+    let generation = {
+        let state = app.state::<Widget>();
+        let mut s = state.0.lock().map_err(|_| "挂件状态异常")?;
+        s.generation = s.generation.saturating_add(1);
+        s.instance = uuid::Uuid::new_v4().to_string();
+        s.ready = false;
+        s.generation
+    };
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let _ = tx.send(codex_window::thread_dpi_matches(host));
@@ -209,7 +246,21 @@ async fn create_child(app: &tauri::AppHandle, host: Host) -> Result<()> {
     let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html?view=widget".into()))
         .title("Fusion 账号池挂件").parent_raw(host.hwnd()).inner_size(CAPSULE_WIDTH, CAPSULE_HEIGHT)
         .decorations(false).transparent(true).resizable(false).skip_taskbar(true)
-        .focused(false).focusable(false).visible(false).build()
+        .focused(false).focusable(false).visible(false)
+        .on_page_load(move |w, e| {
+            if matches!(e.event(), tauri::webview::PageLoadEvent::Started) {
+                if let Ok(mut s) = w.state::<Widget>().0.lock() {
+                    if s.generation == generation {
+                        s.ready = false;
+                        s.instance = uuid::Uuid::new_v4().to_string();
+                        s.transition = s.transition.saturating_add(1);
+                        s.expanded = false;
+                        s.dragging = None;
+                    }
+                }
+                if let Ok(hwnd) = w.hwnd() { let _ = crate::widget_input::maintain(hwnd, false); }
+            }
+        }).build()
         .map_err(|_| "无法创建 Codex 内挂件，请检查 WebView2 与窗口权限".to_owned())?;
     if !w.hwnd().is_ok_and(|hwnd| codex_window::child_dpi_matches(hwnd, host)) {
         let _ = w.destroy();
@@ -221,17 +272,24 @@ async fn create_child(app: &tauri::AppHandle, host: Host) -> Result<()> {
     if let Err(error) = on_ui_thread(app.clone(), move |_| {
         crate::widget_input::install(input_window.hwnd().map_err(|_| "挂件窗口不可用")?, host,
             move |inside| {
+                if !handle.state::<Widget>().0.lock().is_ok_and(|s| s.generation == generation) { return; }
                 if inside {
                     let child = handle.get_webview_window(LABEL).and_then(|w| w.hwnd().ok());
                     if let Some(focus) = codex_window::host_focus(host, child) {
                         if let Ok(mut s) = handle.state::<Widget>().0.lock() { s.focus = Some(focus); }
                     }
                 } else { schedule_collapse(&handle); }
-            }, move |action| action_window.emit("widget-pointer", action).is_ok())
+            }, move |action| {
+                let app = action_window.app_handle();
+                let current = app.state::<Widget>().0.lock().ok().and_then(|s| (s.generation == generation && s.ready).then(|| s.instance.clone()));
+                current.is_some_and(|instance| action_window.emit("widget-pointer", serde_json::json!({"instance":instance,"sequence":action.sequence,"gesture":action.gesture,"kind":action.kind,"x":action.x,"y":action.y,"delta":action.delta})).is_ok())
+            })
     }).await {
         let _ = w.destroy();
         return Err(error);
     }
+    let input = w.clone();
+    on_ui_thread(app.clone(), move |_| crate::widget_input::maintain(input.hwnd().map_err(|_| "挂件窗口不可用")?, false)).await?;
     Ok(())
 }
 fn rescale_anchor(anchor: Anchor, previous: f64, current: f64) -> Anchor {
@@ -298,22 +356,28 @@ fn layout(app: &tauri::AppHandle, open: bool) -> Result<()> {
         .map_err(|_| "无法调整挂件位置")?;
     // Layout must never activate a cross-process child. Tauri's set_focus
     // fallback simulates Alt when SetForegroundWindow rejects the child HWND.
-    let _ = w.emit("widget-expanded", open && shown);
+    let _ = w.emit("widget-expanded", control(app)?);
     Ok(())
 }
 // Keep the native child large enough for the CSS exit animation. A later
 // toggle invalidates the delayed resize; dragging/host geometry remains immediate.
 pub fn expanded(app: &tauri::AppHandle, open: bool) -> Result<()> {
     let w = app.get_webview_window(LABEL).ok_or("挂件窗口尚未创建")?;
-    let revision = {
+    let (generation, revision) = {
         let state = app.state::<Widget>();
         let mut s = state.0.lock().map_err(|_| "挂件状态异常")?;
-        s.transition = s.transition.wrapping_add(1);
-        s.expanded = open && s.shown;
-        s.transition
+        s.transition = s.transition.saturating_add(1);
+        s.expanded = open && s.shown && s.ready;
+        (s.generation, s.transition)
     };
-    if open { layout(app, true)?; }
-    else { let _ = w.emit("widget-expanded", false); }
+    if open {
+        if let Err(error) = layout(app, true) {
+            if let Ok(mut s) = app.state::<Widget>().0.lock() { s.expanded = false; s.transition = s.transition.saturating_add(1); }
+            let _ = w.emit("widget-expanded", control(app)?);
+            return Err(error);
+        }
+    }
+    else { let _ = w.emit("widget-expanded", control(app)?); }
     return_input(app);
     if open { return Ok(()); }
     let handle = app.clone();
@@ -322,7 +386,7 @@ pub fn expanded(app: &tauri::AppHandle, open: bool) -> Result<()> {
         let ui_handle = handle.clone();
         let _ = handle.run_on_main_thread(move || {
             let current = ui_handle.state::<Widget>().0.lock()
-                .is_ok_and(|s| s.transition == revision && !s.expanded);
+                .is_ok_and(|s| s.generation == generation && s.transition == revision && !s.expanded);
             if current {
                 if let Err(error) = layout(&ui_handle, false) { set_warning(&ui_handle, Some(error)); }
             }
@@ -343,13 +407,13 @@ fn return_input(app: &tauri::AppHandle) {
 }
 fn schedule_collapse(app: &tauri::AppHandle) {
     let revision = app.state::<Widget>().0.lock().ok()
-        .and_then(|s| s.expanded.then_some(s.transition));
-    let Some(revision) = revision else { return; };
+        .and_then(|s| s.expanded.then_some((s.generation, s.transition)));
+    let Some((generation, revision)) = revision else { return; };
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let _ = on_ui_thread(handle, move |app| {
             let current = app.state::<Widget>().0.lock()
-                .is_ok_and(|s| s.expanded && s.transition == revision);
+                .is_ok_and(|s| s.generation == generation && s.expanded && s.transition == revision);
             if current {
                 expanded(app, false)?;
             }
@@ -373,11 +437,13 @@ pub fn event(w: &tauri::Window, e: &tauri::WindowEvent) {
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
             let handle = w.app_handle().clone();
-            tauri::async_runtime::spawn(async move { let _ = widget_set_expanded(handle, false).await; });
+            tauri::async_runtime::spawn(async move { let _ = on_ui_thread(handle, |app| expanded(app, false)).await; });
         }
         tauri::WindowEvent::Destroyed => {
+            if w.app_handle().get_webview_window(LABEL).is_some_and(|current| current.hwnd().ok() != w.hwnd().ok()) { return; }
             if let Some(state) = w.app_handle().try_state::<Widget>() {
                 if let Ok(mut s) = state.0.lock() {
+                    s.ready = false;
                     s.host = None;
                     s.area = None;
                     s.shown = false;
@@ -396,14 +462,43 @@ pub fn event(w: &tauri::Window, e: &tauri::WindowEvent) {
                 .lock()
                 .is_ok_and(|s| s.expanded);
             let handle = w.app_handle().clone();
-            tauri::async_runtime::spawn(async move { let _ = widget_set_expanded(handle, open).await; });
+            tauri::async_runtime::spawn(async move { let _ = on_ui_thread(handle, move |app| expanded(app, open)).await; });
         }
         _ => {}
     }
 }
 #[tauri::command]
-pub async fn widget_set_expanded(app: tauri::AppHandle, expanded: bool) -> Result<()> {
-    on_ui_thread(app, move |app| self::expanded(app, expanded)).await
+pub async fn widget_set_expanded(app: tauri::AppHandle, expanded: bool, instance: String) -> Result<Control> {
+    on_ui_thread(app.clone(), move |app| { require_instance(app, &instance)?; self::expanded(app, expanded) }).await?;
+    control(&app)
+}
+fn control(app: &tauri::AppHandle) -> Result<Control> {
+    let state = app.state::<Widget>();
+    let s = state.0.lock().map_err(|_| "挂件状态异常")?;
+    Ok(Control { instance: s.instance.clone(), revision: s.transition, expanded: s.expanded, ready: s.ready })
+}
+fn require_instance(app: &tauri::AppHandle, instance: &str) -> Result<()> {
+    let state = control(app)?;
+    if !state.ready || state.instance != instance { return Err("挂件已重建，请等待重新连接".into()); }
+    Ok(())
+}
+#[tauri::command]
+pub async fn widget_ready(app: tauri::AppHandle) -> Result<Control> {
+    on_ui_thread(app.clone(), |app| {
+        let w = app.get_webview_window(LABEL).ok_or("挂件窗口尚未创建")?;
+        crate::widget_input::maintain(w.hwnd().map_err(|_| "挂件窗口不可用")?, true)?;
+        let state = app.state::<Widget>();
+        let mut s = state.0.lock().map_err(|_| "挂件状态异常")?;
+        s.ready = true;
+        Ok(())
+    }).await?;
+    control(&app)
+}
+#[tauri::command]
+pub fn widget_input_ack(app: tauri::AppHandle, instance: String, sequence: u64, completed: bool) -> Result<()> {
+    require_instance(&app, &instance)?;
+    crate::widget_input::acknowledge(sequence, completed);
+    Ok(())
 }
 async fn on_ui_thread(app: tauri::AppHandle, action: impl FnOnce(&tauri::AppHandle) -> Result<()> + Send + 'static) -> Result<()> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -413,8 +508,8 @@ async fn on_ui_thread(app: tauri::AppHandle, action: impl FnOnce(&tauri::AppHand
     rx.await.map_err(|_| "挂件窗口任务中断")?
 }
 #[tauri::command]
-pub async fn widget_drag(app: tauri::AppHandle) -> Result<()> {
-    on_ui_thread(app, start_drag).await
+pub async fn widget_drag(app: tauri::AppHandle, instance: String) -> Result<()> {
+    on_ui_thread(app, move |app| { require_instance(app, &instance)?; start_drag(app) }).await
 }
 fn start_drag(app: &tauri::AppHandle) -> Result<()> {
     let _ = expanded(app, false);
@@ -426,8 +521,8 @@ fn start_drag(app: &tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 #[tauri::command]
-pub async fn widget_open_console(app: tauri::AppHandle) -> Result<()> {
-    on_ui_thread(app, open_console).await
+pub async fn widget_open_console(app: tauri::AppHandle, instance: String) -> Result<()> {
+    on_ui_thread(app, move |app| { require_instance(app, &instance)?; open_console(app) }).await
 }
 fn open_console(app: &tauri::AppHandle) -> Result<()> {
     let _ = expanded(app, false);
@@ -452,11 +547,12 @@ fn quota_remaining(account: &pool_core::Account, now: i64) -> Option<f64> {
         .map(|used| (100. - used).clamp(0., 100.)).reduce(f64::min)
 }
 #[tauri::command]
-pub async fn widget_snapshot(a: tauri::State<'_, App>, details: bool) -> Result<serde_json::Value> {
+pub async fn widget_snapshot(a: tauri::State<'_, App>, app: tauri::AppHandle, details: bool) -> Result<serde_json::Value> {
     if a.connection.status().await?.mode != "on" {
         return Ok(serde_json::json!({"on":false}));
     }
     let active = if details { a.gateway.status().await.requests } else { Vec::new() };
+    let control = control(&app)?;
     let accounts_service = a.accounts.clone();
     let scheduler = a.gateway.scheduler.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -479,7 +575,7 @@ pub async fn widget_snapshot(a: tauri::State<'_, App>, details: bool) -> Result<
         let remaining = chosen.and_then(|account| quota_remaining(account, now));
         let quotas: Vec<f64> = accounts.iter().filter_map(|account| quota_remaining(account, now)).collect();
         let (all, current_summary) = store.request_summaries(conversation.as_deref())?;
-        let mut out = serde_json::json!({"on":true,"remaining":remaining,"conversationKey":conversation,
+        let mut out = serde_json::json!({"control":control,"on":true,"remaining":remaining,"conversationKey":conversation,
             "totalRemaining":if quotas.is_empty() { None } else { Some(quotas.iter().sum::<f64>()) },
             "quotaAccounts":quotas.len(),"totalAccounts":accounts.len(),
             "tokens":if all.measured_requests > 0 { Some(all.total_tokens) } else { None },

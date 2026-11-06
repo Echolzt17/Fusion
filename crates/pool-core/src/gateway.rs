@@ -313,14 +313,15 @@ async fn request(
 ) -> std::result::Result<reqwest::RequestBuilder, NetworkFailure> {
     audit.phase("catalog_proxy");
     let endpoint = format!("{}{path}", audit.ctx.upstream);
-    let (builder, source, retry_client) = tokio::select! {
+    let (builder, source, retry_client, route_lease) = tokio::select! {
         _ = audit.ctx.cancel.cancelled() => return Err(NetworkFailure { code: "service_stopped", stage: FailureStage::ServiceStopped, kind: None, message: "服务已停止，未发送上游请求".into() }),
-        result = audit.ctx.accounts.http.gateway_request(method, &endpoint) => result.map_err(|message| NetworkFailure {
+        result = audit.ctx.accounts.http.pool_gateway_request(method, &endpoint) => result.map_err(|message| NetworkFailure {
             code: "proxy_configuration", stage: FailureStage::ProxyResolution, kind: None, message,
         })?,
     };
     audit.diagnostic.proxy_source = source;
     audit.retry_client = Some(retry_client);
+    audit.route_lease = route_lease;
     let mut r = builder
         .bearer_auth(t)
         .header("ChatGPT-Account-ID", &lease.account.account_id)
@@ -462,6 +463,7 @@ struct Audit {
     usage: Option<crate::usage::TokenUsage>,
     transport: transport::Telemetry,
     retry_client: Option<reqwest::Client>,
+    route_lease: Option<crate::network::RouteLease>,
     diagnostic: RequestDiagnostic,
     phase_name: &'static str,
     phase_at: Instant,
@@ -499,6 +501,7 @@ impl Audit {
             usage: None,
             transport: Default::default(),
             retry_client: None,
+            route_lease: None,
             diagnostic,
             phase_name: "initial",
             phase_at: Instant::now(),
@@ -648,6 +651,11 @@ impl Drop for Audit {
             } else {
                 FailureStage::Cancelled
             });
+        }
+        if let Some(route) = &self.route_lease {
+            if !matches!(self.status.as_str(), "cancelled" | "service_stopped") {
+                route.record_business(self.status == "success", self.diagnostic.network_error_kind.is_some());
+            }
         }
         if let Some(x) = self.diagnostic.execution.as_mut() { x.transport = Some(self.transport.lock().unwrap().clone()); }
         let origin = crate::diagnostics::failure_origin(&self.status, &self.diagnostic);

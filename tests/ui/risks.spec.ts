@@ -29,6 +29,7 @@ async function fixture(page: Page, failures: string[] = [], enabled = true, slow
           case 'main_visible': return state.visible;
           case 'settings': return { port: 18765, concurrency: 2, fixedAccount: null, selectionPolicy: 'auto' };
           case 'accounts': return state.accounts;
+          case 'api_client_status': return [];
           case 'service_status': return state.service;
           case 'cancel_request': {
             const service = state.service as typeof state.service & { requests?: { id: string }[] };
@@ -111,7 +112,6 @@ test('slow quota reads leave lifecycle and other account actions usable while wr
   await expect(second.getByRole('button', { name: '刷新额度', exact: true })).toBeEnabled();
   await second.getByRole('button', { name: '暂停账号', exact: true }).click();
   await expect(second.getByRole('button', { name: '恢复账号', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '连接与设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '关闭账号池', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '关闭账号池', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -146,17 +146,15 @@ test('refresh all joins account reads and reports partial failure only after eve
   expect(await page.evaluate(() => (window as any).fixture.calls.filter((c: any) => c.command === 'refresh_quota').length)).toBe(2);
 });
 
-test('chat continuation guidance is available beside both lifecycle controls', async ({ page }) => {
+test('lifecycle controls stay on the dashboard without redundant guidance or settings entry', async ({ page }) => {
   await fixture(page);
-  const guide = page.getByLabel('聊天续接说明');
-  await expect(guide).toContainText('首选账号只影响新会话');
-  await expect(guide).toContainText('重新启动账号池后继续');
-  await expect(guide).toContainText('关闭只恢复启用前的接入');
-  await expect(guide).toContainText('新建聊天并带入任务摘要');
-  await expect(guide).toContainText('池内上下文不会自动迁移');
+  await expect(page.getByLabel('聊天续接说明')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '关闭账号池', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '连接与设置', exact: true }).click();
-  await expect(guide).toBeVisible();
-  await expect(guide).toContainText('已有聊天始终使用原账号');
+  await expect(page.getByLabel('聊天续接说明')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Codex 接入', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '关闭账号池', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '检查连接', exact: true })).toHaveCount(0);
 });
 test('error report requires explicit confirmation and cancel sends nothing',async({page})=>{
   await reportingFixture(page);const trigger=page.getByRole('button',{name:'日志上报',exact:true});await trigger.click();
@@ -259,7 +257,6 @@ test('one click starts without a config preview and reset card still requires ex
 
 test('close starts immediately without strategy choices and displays progress', async ({ page }) => {
   await fixture(page);
-  await page.getByRole('button', { name: '连接与设置', exact: true }).click();
   await page.getByRole('button', { name: '关闭账号池', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '停止与退出' })).toHaveCount(0);
   await expect(page.locator('.shutdown-progress')).toContainText('活动请求 2 个');
@@ -270,7 +267,7 @@ test('close starts immediately without strategy choices and displays progress', 
   await expect(page.locator('.local-tag')).toHaveText('账号池已关闭');
   await expect(page.locator('.shutdown-progress')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /通知中心/ })).toHaveAttribute('aria-label', '通知中心，1 条未读');
-  await expect(page.getByText('启动后自动配置并打开 Codex；关闭后恢复原接入并保持 Codex 关闭。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '启动账号池', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: /通知中心/ }).click();
   await page.locator('.notification-row').click();
   await expect(page.getByRole('dialog')).toContainText('原接入已恢复，Codex 已关闭');
@@ -283,7 +280,7 @@ test('availability comes from core and image operation is labelled', async ({ pa
   await page.evaluate(() => { (window as any).fixture.accounts[0].available = false; });
   await expect(page.getByText('0 / 1', { exact: true })).toBeVisible({ timeout: 8000 });
   await page.getByRole('button', { name: '连接与设置', exact: true }).click();
-  await expect(page.getByText('桌面小胶囊：', { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '原生生图', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Codex 输入框位置示意' })).toHaveCount(0);
   await page.getByRole('button', { name: '请求日志', exact: true }).click();
   await expect(page.getByText('图片编辑', { exact: true })).toBeVisible();
@@ -302,6 +299,8 @@ test('backend switch continues without a modal while navigating pages', async ({
   await page.getByRole('button', { name: '启动账号池', exact: true }).click();
   await page.getByRole('button', { name: '连接与设置', exact: true }).click();
   await expect(page.locator('.shutdown-progress')).toContainText('正在检查客户端');
+  await expect(page.getByRole('button', { name: '正在启动…', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '账号控制台', exact: true }).click();
   await expect(page.getByRole('button', { name: '正在启动…', exact: true })).toBeDisabled();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).fixture.calls.filter((c: any) => c.command === 'start_pool').length)).toBe(1);
@@ -316,6 +315,7 @@ test('new desktop versions show automatic compatibility progress without manual 
   await expect(page.getByText('桌面 26.1027.3384.0 · codex-cli 0.166.0-alpha.5.1', {exact:true})).toBeVisible();
   await expect(page.getByText(/正在本机临时环境检查对话、生图、改图/)).toBeVisible();
   await expect(page.getByText(/暂不开放配置升级|请先打开已验证/)).toHaveCount(0);
+  await page.getByRole('button', { name: '账号控制台', exact: true }).click();
   await expect(page.getByRole('button', { name: '正在启动…', exact: true })).toBeDisabled();
   expect(await page.evaluate(() => (window as any).fixture.calls.filter((c:any) => c.command==='start_pool').length)).toBe(1);
   await page.evaluate(() => { const s=(window as any).fixture; s.phase='failed';s.mode='off';s.operation='start';s.error='客户端自动兼容检查未通过：图片编辑协议不兼容。桌面 26.1027.3384.0 · codex-cli 0.166.0-alpha.5.1';s.callbacks[s.listeners['start-failed']]({payload:s.error}); });
@@ -334,9 +334,8 @@ test('start admission failure is directly visible and retry uses one backend com
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('settings shows drain, force exit and verification without premature success', async ({ page }) => {
+test('dashboard shows drain, force exit and verification without premature success', async ({ page }) => {
   await fixture(page, [], false);
-  await page.getByRole('button', { name: '连接与设置', exact: true }).click();
   await page.getByRole('button', { name: '启动账号池', exact: true }).click();
   for (const [phase,text] of [['catalog_queue','等待账号名额'],['catalog_auth','正在检查或续期授权'],['catalog_proxy','正在解析当前代理'],['catalog_headers','等待上游模型目录响应'],['catalog_body','正在读取模型目录'],['draining','等待已有请求完成'],['terminating','正在结束 Codex 后台'],['verifying','正在核验客户端']]) {
     await page.evaluate(phase => { const s=(window as any).fixture; s.applied=true;s.service.running=true;s.phase=phase;s.callbacks[s.listeners['main-visible']]({payload:true}); },phase);

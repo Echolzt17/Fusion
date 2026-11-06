@@ -22,6 +22,10 @@ struct State {
     last_native: Option<Instant>,
     last_dispatch: Option<Instant>,
     last_bridge: Option<Instant>,
+    last_sent: u64,
+    last_ack: u64,
+    frontend_received: u64,
+    frontend_completed: u64,
 }
 pub(super) struct Trace {
     created: Instant,
@@ -45,10 +49,24 @@ pub struct Snapshot {
     last_native_age_ms: Option<u64>,
     last_dispatch_age_ms: Option<u64>,
     last_bridge_age_ms: Option<u64>,
+    frontend_received: u64,
+    frontend_completed: u64,
+    unacknowledged: bool,
 }
 fn age(at: Instant) -> u64 { at.elapsed().as_millis().min(u64::MAX as u128) as u64 }
 
 impl Trace {
+    pub(super) fn reset_pending(&self) { self.update(|s| s.last_ack = s.last_sent); }
+    pub(super) fn sent(&self, sequence: u64) { self.update(|s| s.last_sent = sequence); }
+    fn ack(&self, sequence: u64, completed: bool) {
+        self.update(|s| {
+            if sequence > s.last_ack && sequence <= s.last_sent {
+                s.last_ack = sequence;
+                s.frontend_received = s.frontend_received.saturating_add(1);
+                s.frontend_completed = s.frontend_completed.saturating_add(u64::from(completed));
+            }
+        });
+    }
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self { created: Instant::now(), state: Mutex::new(State { active: true, ..State::default() }) })
     }
@@ -95,6 +113,9 @@ impl Trace {
             bridge_accepted: s.bridge_accepted, bridge_failed: s.bridge_failed,
             last_native_age_ms: s.last_native.map(age), last_dispatch_age_ms: s.last_dispatch.map(age),
             last_bridge_age_ms: s.last_bridge.map(age),
+            frontend_received: s.frontend_received,
+            frontend_completed: s.frontend_completed,
+            unacknowledged: s.last_ack < s.last_sent,
         })
     }
 }
@@ -103,6 +124,16 @@ pub(super) fn remember(trace: Arc<Trace>) {
 }
 pub fn diagnostics() -> Option<Snapshot> {
     LATEST.get()?.lock().ok()?.as_ref()?.snapshot()
+}
+pub fn acknowledge(sequence: u64, completed: bool) {
+    if let Some(latest) = LATEST.get() {
+        if let Ok(trace) = latest.lock() { if let Some(trace) = trace.as_ref() { trace.ack(sequence, completed); } }
+    }
+}
+pub fn stalled() -> bool {
+    LATEST.get().and_then(|latest| latest.lock().ok()).and_then(|trace| trace.as_ref().cloned())
+        .and_then(|trace| trace.state.lock().ok().map(|s| s.active && s.last_ack < s.last_sent && s.last_bridge.is_some_and(|at| at.elapsed().as_secs() >= 3)))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -135,5 +166,18 @@ mod tests {
         let _ = std::thread::spawn(move || { let _state = poisoned.state.lock().unwrap(); panic!("fixture metadata failure"); }).join();
         trace.native("down"); trace.dispatched("down"); trace.bridge(true);
         assert!(trace.snapshot().is_none());
+    }
+    #[test]
+    fn frontend_acknowledgements_are_bounded_distinct_and_idempotent() {
+        let trace = Trace::new();
+        trace.sent(1); trace.ack(2, true);
+        let snapshot = serde_json::to_value(trace.snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot["frontendReceived"],0);
+        assert_eq!(snapshot["unacknowledged"],true);
+        trace.ack(1,true); trace.ack(1,true); trace.sent(2); trace.ack(2,false);
+        let snapshot = serde_json::to_value(trace.snapshot().unwrap()).unwrap();
+        assert_eq!(snapshot["frontendReceived"],2);
+        assert_eq!(snapshot["frontendCompleted"],1);
+        assert_eq!(snapshot["unacknowledged"],false);
     }
 }

@@ -8,7 +8,7 @@ async function fixture(page: Page, widget = true) {
     logs.push({...logs[0],id:'check',operation:'models',conversationKey:null});
     const conversations=['aaaaaaaaaaaa','bbbbbbbbbbbb','pruned'].map((id,i)=>({conversationKey:'thread:'+id,requests:i?15:61,measuredRequests:i?15:61,tokens,firstObservedAt:1000,lastStartedAt:i?2000:3000,lastAccount:i?'b':'a',historyPartial:i===2}));
     const update={operationActive:false,startupPromptPending:false,currentVersion:'0.1.31',phase:'current',version:null as string|null,notes:null as string|null,downloaded:0,total:null as number|null,message:null as string|null,installing:false};
-    const state={update,calls:[] as {command:string;args:any}[],logs,conversations,on:true,error:false,failHistory:false,quotaAccounts:2,poolRemaining:148 as number|null,remaining:68 as number|null,tokens:942400 as number|null,recent:'thread:aaaaaaaaaaaa' as string|null,active:0,listeners:{} as Record<string,number>,callbacks:{} as Record<number,(e:any)=>void>};
+    const state={control:{instance:"fixture-widget",revision:0,expanded:false,ready:true},sequence:0,gesture:0,update,calls:[] as {command:string;args:any}[],logs,conversations,on:true,error:false,failHistory:false,quotaAccounts:2,poolRemaining:148 as number|null,remaining:68 as number|null,tokens:942400 as number|null,recent:'thread:aaaaaaaaaaaa' as string|null,active:0,listeners:{} as Record<string,number>,callbacks:{} as Record<number,(e:any)=>void>};
     const catalog=()=>{
       const scope=(system:boolean)=>{
         const items=logs.filter(l=>(l.operation==='models')===system);
@@ -31,7 +31,7 @@ async function fixture(page: Page, widget = true) {
         };
         const business=logs.filter(l=>l.operation!=='models');const all=summarize(business);
         const current=state.recent?summarize(business.filter(l=>l.conversationKey===state.recent)):null;
-        return {on:state.on,remaining:state.remaining,totalRemaining:state.poolRemaining,quotaAccounts:state.quotaAccounts,totalAccounts:2,tokens:state.tokens,usagePartial:all.measuredRequests<all.requests,conversationKey:state.recent,currentAccountLabel:state.recent==='thread:bbbbbbbbbbbb'?'账号 2':'账号 1',details:args.details?{conversationKey:state.recent,current,all,activeCurrent:state.active,activeAll:state.active}:undefined};
+        return {control:{...state.control},on:state.on,remaining:state.remaining,totalRemaining:state.poolRemaining,quotaAccounts:state.quotaAccounts,totalAccounts:2,tokens:state.tokens,usagePartial:all.measuredRequests<all.requests,conversationKey:state.recent,currentAccountLabel:state.recent==='thread:bbbbbbbbbbbb'?'账号 2':'账号 1',details:args.details?{conversationKey:state.recent,current,all,activeCurrent:state.active,activeAll:state.active}:undefined};
       }
       if(command==='conversation_usage')return index();
       if(command==='request_history'){
@@ -47,6 +47,7 @@ async function fixture(page: Page, widget = true) {
       if(command==='install_update'){state.update.operationActive=true;state.update.startupPromptPending=false;state.update.phase='downloading';return;}
       if(command==='open_update_repair')return;
       if(command==='accounts')return accounts;
+      if(command==='api_client_status')return [];
       if(command==='usage')return [];
       if(command==='logs')return logs;
       if(command==='settings')return {port:18765,concurrency:2,fixedAccount:null,selectionPolicy:'auto'};
@@ -58,7 +59,9 @@ async function fixture(page: Page, widget = true) {
       if(command==='main_visible')return true;
       if(command==='uninstall_requested')return false;
       if(command==='reset_credits')return {available_count:0,credits:[]};
-      if(['widget_set_expanded','widget_drag','widget_open_console'].includes(command))return;
+      if(command==='widget_ready')return {...state.control};
+      if(command==='widget_set_expanded'){state.control={...state.control,revision:state.control.revision+1,expanded:args.expanded};return {...state.control};}
+      if(['widget_drag','widget_open_console','widget_input_ack'].includes(command))return;
       throw new Error('unexpected IPC '+command);
     }}});
   });
@@ -100,7 +103,7 @@ test('native pointer actions operate the read-only panel without focusing the We
     const rect=await locator.boundingBox();expect(rect).not.toBeNull();
     await page.evaluate(({rect,kind,delta})=>{
       const f=(window as any).widgetFixture;
-      const send=(kind:string)=>f.callbacks[f.listeners['widget-pointer']]({payload:{kind,x:rect!.x+rect!.width/2,y:rect!.y+rect!.height/2,delta}});
+      const send=(kind:string)=>{if(kind==='down')f.gesture++;f.callbacks[f.listeners['widget-pointer']]({payload:{instance:f.control.instance,sequence:++f.sequence,gesture:f.gesture,kind,x:rect!.x+rect!.width/2,y:rect!.y+rect!.height/2,delta}});};
       if(kind==='click'){send('down');send('up');}else send(kind);
     },{rect,kind,delta});
   };
@@ -127,6 +130,33 @@ test('native pointer actions operate the read-only panel without focusing the We
   await expect.poll(()=>page.evaluate(()=>(window as any).widgetFixture.calls.filter((c:any)=>c.command==='widget_open_console').length)).toBe(1);
   await pointer(page.locator('.widget-grip'),'down');
   await expect.poll(()=>page.evaluate(()=>(window as any).widgetFixture.calls.filter((c:any)=>c.command==='widget_drag').length)).toBe(1);
+});
+
+test('old instances and late revisions cannot toggle or replay native actions', async ({page}) => {
+  await fixture(page);
+  const toggle = page.getByRole('button', {name:'展开或收起账号池详情'});
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  await page.evaluate(() => {
+    const f=(window as any).widgetFixture;
+    const send=(payload:any)=>f.callbacks[f.listeners['widget-expanded']]({payload});
+    send({instance:'destroyed-instance',revision:10000,expanded:false,ready:true});
+    send({instance:f.control.instance,revision:0,expanded:false,ready:true});
+  });
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  const box=await toggle.boundingBox();
+  await page.evaluate(box => {
+    const f=(window as any).widgetFixture;
+    const pointer=(payload:any)=>f.callbacks[f.listeners['widget-pointer']]({payload});
+    const base={instance:f.control.instance,gesture:77,x:box!.x+20,y:box!.y+20,delta:0};
+    pointer({...base,sequence:100,kind:'down'});pointer({...base,sequence:101,kind:'up'});
+    pointer({...base,sequence:101,kind:'up'}); // repeated delivery must not replay a click
+    pointer({...base,instance:'destroyed-instance',sequence:10000,kind:'down'});
+    pointer({...base,instance:'destroyed-instance',sequence:10001,kind:'up'});
+  },box);
+  await expect(toggle).toHaveAttribute('aria-expanded','false');
+  await expect.poll(()=>page.evaluate(()=>(window as any).widgetFixture.calls.filter((c:any)=>c.command==='widget_input_ack' && c.args.completed).length)).toBe(1);
+  expect(await page.evaluate(()=>(window as any).widgetFixture.calls.filter((c:any)=>c.command==='widget_set_expanded').length)).toBe(2);
 });
 
 test('the actual 340 by 40 collapsed viewport never clips the capsule after opening and closing',async({browser})=>{
@@ -193,7 +223,7 @@ test('capsule contains only quota and total tokens; summary scope survives colla
   await expect(page.getByRole('tab',{name:'全部对话',exact:true})).toHaveAttribute('aria-selected','true');
   expect(await page.evaluate(()=>(window as any).widgetFixture.calls.some((c:any)=>['request_history','refresh_quota','reset_credits','consume_reset','login','close_pool'].includes(c.command)))).toBe(false);
   await page.getByRole('button',{name:'打开控制台'}).click();
-  expect(await page.evaluate(()=>(window as any).widgetFixture.calls.find((c:any)=>c.command==='widget_open_console').args)).toEqual({});
+  expect(await page.evaluate(()=>(window as any).widgetFixture.calls.find((c:any)=>c.command==='widget_open_console').args)).toEqual({instance:'fixture-widget'});
 });
 
 test('rapid toggles settle on the latest intent and closed panel cannot retain keyboard focus',async({page})=>{
@@ -251,7 +281,7 @@ test('partial quota, unknown conversation, failed reads, drag and native collaps
   await page.evaluate(()=>{(window as any).widgetFixture.error=true;});
   await expect(page.getByRole('alert')).toContainText('保留上次数据',{timeout:6000});
   await expect(page.locator('.widget-request-total')).toContainText('77 次');
-  await page.evaluate(()=>{const s=(window as any).widgetFixture;s.callbacks[s.listeners['widget-expanded']]({payload:false});});
+  await page.evaluate(()=>{const s=(window as any).widgetFixture;s.control={...s.control,revision:s.control.revision+1,expanded:false};s.callbacks[s.listeners['widget-expanded']]({payload:{...s.control}});});
   await expect(page.locator('.widget-panel')).toBeHidden();
   await page.getByTitle('拖动挂件').dispatchEvent('mousedown',{button:0});
   expect(await page.evaluate(()=>(window as any).widgetFixture.calls.some((c:any)=>c.command==='widget_drag'))).toBe(true);

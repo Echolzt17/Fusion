@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $project = Split-Path -Parent $PSScriptRoot
+& (Join-Path $PSScriptRoot 'prepare-network-kernel.ps1') -CheckOnly
+if ($LASTEXITCODE -ne 0) { throw 'Pinned network kernel verification failed.' }
 $signingDir = Join-Path $env:USERPROFILE '.fusion-signing'
 $keyPath = Join-Path $signingDir 'fusion.key'
 if (-not (Test-Path -LiteralPath $keyPath)) { throw 'Run npm run updates:setup before building the bootstrap installer.' }

@@ -32,6 +32,7 @@ fn clean(local: &Path, remove_credentials: impl FnOnce() -> Result<()>) -> Resul
 pub fn run() -> Result<()> {
     let path = config::codex_config_path()?;
     let exe = std::env::current_exe().map_err(|_| "找不到程序路径")?;
+    if !pool_core::api_config::detached(&path)? { return Err("请先关闭 API 接入再删除应用数据".into()); }
     if !config::detached(&path, &exe, 18765)? { return Err("请先恢复原接入再删除应用数据".into()); }
     let local = std::env::var_os("LOCALAPPDATA").ok_or("无法找到本机用户数据目录")?;
     clean(Path::new(&local), vault::cleanup::remove_app_credentials)

@@ -25,14 +25,26 @@ mod recovery_ui;
 mod quota_refresh;
 mod usage_dashboard;
 mod widget;
+mod handoffs;
+mod api_clients;
+mod api_commands;
 mod widget_input;
 mod window_layout;
 mod windows_environment;
 mod uninstall_data;
 mod updates;
+mod pricing;
 mod error_reports;
+mod network_kernel;
+mod network_commands;
 
 struct App {
+    network: Arc<pool_core::network::Network>,
+    pricing: pricing::Pricing,
+    api_sources: Arc<pool_core::api_sources::Sources>,
+    api_clients: Arc<api_clients::ApiClients>,
+    api_sources_lock: tokio::sync::RwLock<()>,
+    handoffs: Arc<handoffs::Handoffs>,
     usage_dashboard: Arc<usage_dashboard::UsageDashboard>,
     reports: Arc<error_reports::Reports>,
     updates: Arc<updates::Updates>,
@@ -74,15 +86,27 @@ fn request_close(app: tauri::AppHandle, exit_app: bool) {
     );
     tauri::async_runtime::spawn(async move {
         let _switch = lifecycle.lock().await;
+        let mut network_checks = if exit_app {
+            Some(app.state::<App>().network.pause_background_checks())
+        } else { None };
+        let mut exit_work = if exit_app {
+            Some(app.state::<App>().updates.freeze_work().await)
+        } else { None };
         oauth.cancel();
         let progress = connection.clone();
         let store = app.state::<App>().accounts.store.clone();
-        let result = close_connection(&connection, move || {
-            codex_lifecycle::stop_client(&store, |phase| progress.set_phase(phase)).map(|_| ())
-        }).await;
-        if let Err(error) = &result {
-            connection.close_failed(error.clone()).await;
-        }
+        let mut result = async {
+            let clients = app.state::<App>().api_clients.clone();
+            let api_owned = clients.has_connection(pool_core::api_sources::ClientKind::Codex).await?;
+            if exit_app { clients.stop_all().await?; }
+            else { clients.stop(pool_core::api_sources::ClientKind::Codex).await?; }
+            if api_owned && !config::has_backup(&store)? { return Ok(()); }
+            let result = close_connection(&connection, move || {
+                codex_lifecycle::stop_client(&store, |phase| progress.set_phase(phase)).map(|_| ())
+            }).await;
+            if let Err(error) = &result { connection.close_failed(error.clone()).await; }
+            result
+        }.await;
         let exit_app = {
             let mut intent = intent.lock().unwrap();
             let exit_app = intent.exit_app;
@@ -90,6 +114,19 @@ fn request_close(app: tauri::AppHandle, exit_app: bool) {
             intent.exit_app = false;
             exit_app
         };
+        // A tray exit may upgrade a close already in progress. Drain the other
+        // managed client before honoring that later exit intent.
+        if exit_app {
+            if network_checks.is_none() { network_checks = Some(app.state::<App>().network.pause_background_checks()); }
+            if exit_work.is_none() { exit_work = Some(app.state::<App>().updates.freeze_work().await); }
+            let closed = app.state::<App>().api_clients.stop_all().await;
+            if result.is_ok() { result = closed; }
+            if result.is_ok() { result = app.state::<App>().accounts.wait_background_idle().await; }
+            if result.is_ok() { result = app.state::<App>().network.shutdown().await; }
+        }
+        // Keep the work barrier alive through the final outcome below.
+        let _exit_work = exit_work;
+        let _network_checks = network_checks;
         match result {
             Ok(()) if exit_app => app.exit(0),
             Ok(()) => {
@@ -223,6 +260,21 @@ fn main_visible(window: tauri::WebviewWindow) -> bool {
     window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true)
 }
 #[tauri::command]
+async fn ai_pricing(a: tauri::State<'_, App>) -> std::result::Result<pricing::PricingSnapshot, String> {
+    a.pricing.load().await
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PricingWebsite { Comparison, Recharge }
+#[tauri::command]
+fn open_pricing_website(app: tauri::AppHandle, site: PricingWebsite) -> std::result::Result<(), String> {
+    let url = match site {
+        PricingWebsite::Comparison => "https://opentherank.com/zh/ai-pricing/",
+        PricingWebsite::Recharge => "https://priceai.cc/products/chatgpt-codex-service",
+    };
+    app.opener().open_url(url, None::<&str>).map_err(|_| "无法打开系统浏览器".into())
+}
+#[tauri::command]
 async fn accounts(a: tauri::State<'_, App>) -> Result<Vec<serde_json::Value>> {
     let accounts = a.accounts.clone();
     let scheduler = a.gateway.scheduler.clone();
@@ -317,6 +369,10 @@ async fn cancel_request(a: tauri::State<'_, App>, id: String) -> Result<()> {
 }
 #[tauri::command]
 async fn connection_status(a: tauri::State<'_, App>) -> Result<pool_core::connection::Status> {
+    if a.api_clients.has_connection(pool_core::api_sources::ClientKind::Codex).await? {
+        return Ok(pool_core::connection::Status { mode: "off", configured: false, recovery_pending: false,
+            reload_required: None, error: None, operation: None, phase: None, operation_started_at: None });
+    }
     a.connection.status().await
 }
 #[tauri::command]
@@ -373,13 +429,16 @@ fn start_pool(app: tauri::AppHandle, account_id: Option<String>) -> Result<()> {
     if close.running { return Err("账号池正在关闭，请等待完成".into()); }
     if a.connection.starting() { return Ok(()); }
     let switch = a.lifecycle.clone().try_lock_owned().map_err(|_| "账号池正在切换，请等待完成")?;
-    a.connection.begin_start()?;
     let (connection, scheduler, store) = (a.connection.clone(), a.gateway.scheduler.clone(), a.accounts.store.clone());
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let _work = work;
         let _switch = switch;
+        let mut legacy_started = false;
         let result = async {
+            handle.state::<App>().api_clients.stop(pool_core::api_sources::ClientKind::Codex).await?;
+            connection.begin_start()?;
+            legacy_started = true;
             if let Some(id) = account_id { blocking(move || scheduler.select_account(Some(id))).await?; }
             // Check eligibility and compatibility without opening a temporary
             // desktop. Refresh the fingerprint after the potentially long probe.
@@ -399,7 +458,7 @@ fn start_pool(app: tauri::AppHandle, account_id: Option<String>) -> Result<()> {
             blocking(move || codex_lifecycle::launch(target, &identity, &store, |phase| progress.set_phase(phase))).await?;
             connection.client_reloaded().await
         }.await;
-        if let Err(error) = &result { connection.start_failed(error.clone()).await; }
+        if legacy_started { if let Err(error) = &result { connection.start_failed(error.clone()).await; } }
         match result {
             Ok(()) => { handle.state::<App>().updates.resume_finished(); let _ = handle.emit("start-complete", ()); }
             Err(error) => {
@@ -495,6 +554,7 @@ fn main() {
     }
     if std::env::args().any(|a| a == "--check-uninstall-safe") {
         let safe = config::codex_config_path().and_then(|p| {
+            if !pool_core::api_config::detached(&p)? { return Ok(false); }
             config::detached(
                 &p,
                 &std::env::current_exe().map_err(|_| "找不到程序路径")?,
@@ -547,18 +607,37 @@ fn main() {
             // Display the safe recovery message here as well as on early Builder failures.
             let setup_result: std::result::Result<(), Box<dyn std::error::Error>> = (|| {
                 let accounts = pool_accounts;
+                let bundled = app.path().resource_dir()?.join("network-kernel").join("mihomo.exe");
+                #[cfg(debug_assertions)]
+                let bundled = if bundled.is_file() { bundled } else {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/network-kernel/mihomo.exe")
+                };
+                let network_root = data_dir()?.join("network");
+                let kernel = network_kernel::NetworkKernel::new(bundled, network_root.join("runtime"))?;
+                let network = pool_core::network::Network::new(accounts.store.clone(), accounts.vault.clone(), network_root, kernel)?;
+                accounts.http.set_network(network.clone())?;
+                let background_network = network.clone();
+                tauri::async_runtime::spawn(async move { background_network.start_background(); });
                 let gateway = Gateway::new(accounts.clone());
                 let connection = Connection::new(
                     gateway.clone(),
                     config::codex_config_path()?,
                     std::env::current_exe()?,
                 );
+                let api_sources = Arc::new(pool_core::api_sources::Sources::new(accounts.store.clone(), vault::system_vault()?));
+                let api_clients = api_clients::ApiClients::new(accounts.store.clone(), api_sources.clone(), config::codex_config_path()?);
                 let updates = Arc::new(updates::Updates::new(data_dir()?.join("updates")));
                 let dashboard = Arc::new(usage_dashboard::UsageDashboard::default());
                 let codex_root = config::codex_config_path()?.parent().ok_or("Codex 数据目录无效")?.to_path_buf();
                 dashboard.clone().start(accounts.store.clone(), codex_root, updates.clone());
                 app.manage(updates.clone());
                 app.manage(App {
+                    network,
+                    pricing: pricing::Pricing::new(data_dir()?.join("ai-pricing")),
+                    api_sources,
+                    api_clients,
+                    api_sources_lock: tokio::sync::RwLock::new(()),
+                    handoffs: Arc::new(handoffs::Handoffs::default()),
                     usage_dashboard: dashboard,
                     reports: Arc::new(error_reports::Reports::new(data_dir()?.join("error-reports"))),
                     updates: updates.clone(),
@@ -660,6 +739,26 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            network_commands::network_status,
+            network_commands::network_import,
+            network_commands::network_refresh,
+            network_commands::network_remove,
+            network_commands::network_save_settings,
+            network_commands::network_select,
+            network_commands::network_check,
+            network_commands::network_set_enabled,
+            network_commands::network_retry,
+            ai_pricing,
+            open_pricing_website,
+            api_commands::api_sources,
+            api_commands::save_api_source,
+            api_commands::remove_api_source,
+            api_commands::check_api_source,
+            api_commands::api_client_status,
+            api_commands::start_api_connection,
+            api_commands::stop_api_connection,
+            api_commands::api_request_logs,
+            api_commands::open_claude_login,
             error_reports::prepare_error_report,
             error_reports::submit_error_report,
             error_reports::error_report_status,
@@ -671,6 +770,15 @@ fn main() {
             updates::open_update_repair,
             updates::open_project_repository,
             main_visible,
+            widget::widget_ready,
+            widget::widget_input_ack,
+            handoffs::handoff_chats,
+            handoffs::handoff_prepare,
+            handoffs::handoff_create,
+            handoffs::handoff_send,
+            handoffs::handoff_status,
+            handoffs::handoff_cancel,
+            handoffs::handoff_open,
             widget::widget_snapshot,
             widget::widget_set_expanded,
             widget::widget_drag,
