@@ -1,0 +1,41 @@
+{
+  "name": "personal-codex-pool",
+  "version": "1.0.9",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "web:dev": "vite --host 127.0.0.1",
+    "web:build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit && cargo check --workspace",
+    "test": "cargo test -p pool-core",
+    "test:native-images": "node scripts/verify-native-images.mjs",
+    "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-signed.ps1",
+    "updates:setup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-update-signing.ps1",
+    "updates:backup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/backup-update-signing.ps1",
+    "updates:release": "node scripts/release-update.mjs",
+    "test:updates": "node --test scripts/release-update.test.mjs && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-signing-backup.ps1 && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-publish-credential.ps1",
+    "icons": "node scripts/generate-icons.mjs",
+    "test:ui": "playwright test",
+    "test:stress": "cargo test -p pool-core stress_ -- --nocapture",
+    "licenses": "node scripts/generate-notices.mjs",
+    "test:installer": "node scripts/verify-installer-guard.mjs && node scripts/verify-installer-webview.mjs && node scripts/verify-installer-cleanup.mjs",
+    "check:version": "node scripts/verify-version.mjs",
+    "updates:acceptance:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-update-acceptance.ps1",
+    "updates:acceptance:serve": "node scripts/serve-update-acceptance.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@tauri-apps/cli": "^2.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

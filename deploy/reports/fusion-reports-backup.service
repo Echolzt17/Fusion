@@ -1,0 +1,17 @@
+[Unit]
+Description=Fusion consistent SQLite backup
+After=fusion-reports.service
+
+[Service]
+Type=oneshot
+User=fusion-reports
+Group=fusion-reports
+ExecStart=/opt/fusion-reports/fusion-report-server backup
+Environment=FUSION_REPORT_DATA=/var/lib/fusion-reports
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fusion-reports
+PrivateTmp=true
+MemoryMax=256M

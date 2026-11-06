@@ -1,0 +1,75 @@
+/* Uiverse adaptations: gharsh11032000, vinodjangid07, catraco,
+   dexter-st, mobinkakei, spotift_5948. See THIRD_PARTY_NOTICES.md (MIT). */
+.theme-control{display:flex;gap:12px;align-items:center;color:var(--muted)}
+.theme-switch{font-size:15px;position:relative;display:inline-block;width:3.5em;height:2em;flex-shrink:0}
+.theme-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0}
+.slider{position:absolute;cursor:pointer;inset:0;border:2px solid #73737c;border-radius:50px;transition:all .4s cubic-bezier(.175,.885,.32,1.275);background:#dadbe2}
+.slider:before{position:absolute;content:"";height:1.4em;width:1.4em;left:.2em;bottom:.17em;background:#fff;border-radius:inherit;transition:all .4s cubic-bezier(.23,1,.32,1)}
+.theme-switch input:checked+.slider{box-shadow:0 0 12px #0975f133;border-color:#0974f1;background:#242933}
+.theme-switch input:checked+.slider:before{transform:translateX(1.5em)}
+.theme-switch input:focus-visible+.slider{outline:2px solid var(--accent);outline-offset:4px}
+button.action-add{border:0;background:transparent;padding:0;color:var(--text);gap:10px}
+.action-add svg{width:42px;height:42px;fill:none;stroke:#a1a1aa;stroke-width:1.5;transition:.3s}
+.action-add:hover:not(:disabled) svg{transform:rotate(90deg);fill:#27272a;stroke:#e4e4e7}
+button.action-delete{width:40px;height:40px;border-radius:50%;background:#141414;border:0;color:#fff;position:relative;overflow:hidden;padding:0;transition:.3s;flex-shrink:0;box-shadow:0 0 15px #0002}
+.action-delete svg{width:12px;height:16px;fill:white;transition:.3s}
+.action-delete .action-label{position:absolute;inset:0;display:grid;place-items:center;white-space:nowrap;font-size:12px;line-height:1;opacity:0;transform:translateY(-100%);transition:transform .3s,opacity .3s}
+button.action-delete:hover:not(:disabled),button.action-delete:focus-visible{width:116px;border-radius:50px;background:#ff4545}
+.action-delete:hover:not(:disabled) svg,.action-delete:focus-visible svg{transform:translateY(28px)}
+.action-delete:hover:not(:disabled) .action-label,.action-delete:focus-visible .action-label{opacity:1;transform:translateY(0)}
+button.action-next{display:inline-flex;padding:10px 20px;background:#6225e6;color:white;box-shadow:4px 4px 0 #1a1624;transform:skewX(-15deg);border:0;border-radius:0;transition:.5s;margin:0 6px 5px}
+.action-next .action-label,.action-next>svg{transform:skewX(15deg)}
+.action-next>svg{width:30px;height:20px;fill:white;transition:.5s}
+button.action-next:hover:not(:disabled){transform:skewX(-15deg);box-shadow:7px 7px 0 #fbc638;background:#6225e6}
+.chevron{transition:.4s}.chevron-0{transform:translateX(22px)}.chevron-1{transform:translateX(11px)}
+.action-next:hover:not(:disabled) .chevron{transform:translateX(0);animation:arrow-color 1s infinite alternate}
+@keyframes arrow-color{to{fill:#fbc638}}
+/* Neon liquid layers, with text kept in a readable foreground for both themes. */
+button.action-start{--rad:32px;position:relative;isolation:isolate;overflow:hidden;border:2px solid #d6d1ff;border-radius:var(--rad);background:#f00;padding:12px 30px;color:#171327;font-weight:700;box-shadow:inset 0 0 10px 9px #558;min-height:46px}
+.action-start .action-label{position:relative;z-index:3;text-shadow:0 0 4px #fff;background:#ffffffa6;border-radius:20px;padding:2px 12px;transition:.3s}
+.gradient-layer{position:absolute;pointer-events:none;left:-160px;width:500%;aspect-ratio:1;background:radial-gradient(ellipse at 65% 180%,#fff,#00f,#fff,#00f,#fff,#00f,#fff,#00f,#fff,#00f,#fff);mix-blend-mode:difference;animation:liquid-rotate 8s linear infinite;z-index:1;filter:saturate(.65) brightness(1.8)}
+.gradient-layer:nth-child(2){mix-blend-mode:color-dodge}.button-light{position:absolute;pointer-events:none;width:80%;height:1.9rem;border-radius:50px;background:#fff5;filter:blur(5px);z-index:2;animation:liquid-pulse 3s ease-in-out infinite}
+button.action-start:hover:not(:disabled){background:#f00;border-color:#fff}.action-start:hover:not(:disabled) .action-label{transform:scale(1.05)}
+.action-start:disabled .gradient-layer,.action-start:disabled .button-light{animation-play-state:paused}
+@keyframes liquid-rotate{to{transform:rotate(360deg)}}@keyframes liquid-pulse{50%{opacity:.1}}
+/* andrew-demchenk0/new-kangaroo-60: centered 3D cube. */
+/* cssbuttons-io/massive-mayfly-74 */
+button.action-reset{position:relative;display:inline-block;width:154px;height:38px;padding:0;border:0;background:transparent;border-radius:24px;text-align:center;flex-shrink:0}
+.reset-circle{display:block;width:38px;height:38px;background:#282936;border-radius:24px;transition:width .45s cubic-bezier(.65,0,.076,1)}
+.reset-arrow{position:absolute;left:10px;top:50%;width:18px;height:18px;fill:none;stroke:white;stroke-width:2;transform:translateY(-50%);transition:transform .45s}
+.reset-arrow-shaft{opacity:0;transition:opacity .45s}
+.action-reset .action-label{position:absolute;inset:0 0 0 26px;display:grid;place-items:center;font-size:12px;font-weight:600;transition:color .45s}
+button.action-reset:is(:hover,:focus-visible):not(:disabled){background:transparent}
+.action-reset:is(:hover,:focus-visible):not(:disabled) .reset-circle{width:100%}
+.action-reset:is(:hover,:focus-visible):not(:disabled) .reset-arrow{transform:translate(6px,-50%)}
+.action-reset:is(:hover,:focus-visible):not(:disabled) .reset-arrow-shaft{opacity:1}
+.action-reset:is(:hover,:focus-visible):not(:disabled) .action-label{color:white}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+/* Printer by spotift_5948 (MIT); scoped independently from the sidebar cube. */
+.pool-printer{width:190px;height:170px;flex-shrink:0;position:relative;overflow:hidden;display:grid;place-items:center}
+.pool-printer .scene{position:relative;width:190px;height:170px}
+.pool-printer .paper-group{position:absolute;left:50%;top:22px;transform:translateX(-50%);z-index:1;animation:paper-move 6.4s cubic-bezier(.4,0,.2,1) infinite}
+.pool-printer .paper{box-sizing:border-box;width:54px;height:68px;background:#fff;border:1px solid #d0d0d0;border-radius:3px;padding:7px 8px;display:flex;flex-direction:column;gap:5px;position:relative;z-index:2}
+.pool-printer .paper-shadow{position:absolute;inset:2px -1px -2px 1px;background:#0003;filter:blur(2px)}
+.pool-printer .ink{height:2.5px;background:#2a2a2a;border-radius:1.5px;opacity:0;animation:printer-ink 6.4s ease-out infinite;flex-shrink:0}
+.pool-printer .printer{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:132px;height:96px;z-index:3}
+.pool-printer .printer-top{position:absolute;left:26px;top:0;width:80px;height:17px;background:#f0f0f0;border:1px solid #c8c8c8;border-radius:4px}
+.pool-printer .printer-top-inner{position:absolute;inset:3px;background:#f8f8f8;border:1px solid #d8d8d8}
+.pool-printer .printer-body{position:absolute;left:0;top:14px;width:132px;height:58px;background:#fff;border:1.5px solid #d5d5d5;border-radius:10px;z-index:2;box-shadow:0 5px 0 #0001}
+.pool-printer .slot{position:absolute;left:50%;top:5px;transform:translateX(-50%);width:70px;height:4px;background:#2a2a2a;border-radius:2px}
+.pool-printer .panel{position:absolute;left:9px;top:16px;width:42px;height:16px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:3px}
+.pool-printer .panel-line-lg{position:absolute;left:4px;top:4px;width:16px;height:2.5px;background:#a0a0a0}
+.pool-printer .panel-line-sm{position:absolute;left:4px;top:9px;width:26px;height:2px;background:#c8c8c8}
+.pool-printer .printer-buttons{position:absolute;left:58px;top:18px;display:flex;gap:3px}.pool-printer .printer-buttons i{width:6px;height:6px;background:#e0e0e0;border:1px solid #c8c8c8;border-radius:50%}
+.pool-printer .led-wrap{position:absolute;right:10px;top:16px;width:7px;height:7px}.pool-printer .led{width:7px;height:7px;border-radius:50%;background:#32cd32;animation:printer-led 6.4s infinite}
+.pool-printer .led-glow{position:absolute;inset:-3px;border-radius:50%;background:#32cd3255;animation:liquid-pulse .6s infinite alternate}
+.pool-printer .vents{position:absolute;right:9px;top:30px;display:flex;flex-direction:column;gap:2.5px}.pool-printer .vents i{width:15px;height:2px;background:#e0e0e0}
+.pool-printer .tray{position:absolute;bottom:-3px;left:50%;transform:translateX(-50%);width:108px;height:5px;background:#e8e8e8;border:1px solid #c8c8c8;border-radius:3px}
+.pool-printer .tray-inner{height:2px;background:#d0d0d0;margin:1px 5px}.pool-printer .printer-brand{position:absolute;left:9px;top:46px;width:28px;height:4px;background:#e8e8e8;border-radius:1px}
+.pool-printer.stopped *{animation:none!important}.pool-printer.stopped .paper-group{transform:translateX(-50%) translateY(-6px)}.pool-printer.stopped .ink{opacity:1}.pool-printer.stopped .led{background:#999}.pool-printer.stopped .led-glow{display:none}
+@keyframes paper-move{0%,3%{transform:translateX(-50%) translateY(-75px);opacity:0}18.75%{transform:translateX(-50%) translateY(-6px);opacity:1}43.75%{transform:translateX(-50%) translateY(14px);opacity:1}78%{transform:translateX(-50%) translateY(72px);opacity:1}81.25%,100%{transform:translateX(-50%) translateY(72px);opacity:0}}
+@keyframes printer-ink{0%,43.75%{opacity:0}53.75%,78%{opacity:1}81.25%,100%{opacity:0}}
+@keyframes printer-led{0%,18%{background:#ffa500}19%,43%{background:#1e90ff}44%,100%{background:#32cd32}}
+@media(max-width:850px){.pool-printer{width:150px}}
+@media(max-width:650px){.pool-printer{width:105px}.pool-printer .scene{transform:scale(.7)}}
+@media(prefers-reduced-motion:reduce){.pool-printer.running .paper-group{transform:translateX(-50%) translateY(-6px);opacity:1}.pool-printer .ink{opacity:1}}

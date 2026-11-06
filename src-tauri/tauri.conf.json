@@ -1,0 +1,86 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Fusion",
+  "version": "1.0.9",
+  "identifier": "local.timothy.codexpool",
+  "build": {
+    "beforeDevCommand": "npm run web:dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run web:build",
+    "frontendDist": "../dist",
+    "windows": {
+      "staticVCRuntime": true
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Fusion",
+        "decorations": false,
+        "width": 1080,
+        "height": 760,
+        "minWidth": 840,
+        "minHeight": 620,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../README.md": "README.md",
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../docs/ARCHITECTURE.md": "docs/ARCHITECTURE.md",
+      "../docs/MAINTENANCE.md": "docs/MAINTENANCE.md",
+      "../docs/THIRD_PARTY_LICENSES.txt": "docs/THIRD_PARTY_LICENSES.txt",
+      "../docs/ACCEPTANCE.md": "docs/ACCEPTANCE.md",
+      "../docs/UPDATES.md": "docs/UPDATES.md",
+      "../docs/UPDATE_NOTES.md": "docs/UPDATE_NOTES.md",
+      "../docs/PUBLIC_README.md": "docs/PUBLIC_README.md",
+      "../docs/ERROR_REPORTS.md": "docs/ERROR_REPORTS.md"
+    },
+    "shortDescription": "个人 Codex 本地账号池",
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": [
+          "SimpChinese"
+        ],
+        "installMode": "currentUser",
+        "template": "installer.nsi",
+        "installerHooks": "installer-hooks.nsh"
+      },
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      },
+      "minimumWebview2Version": "110.0.1587.40"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxRkVBQjIxOEU4RkFGRDMKUldUVHI0K09JYXYrTVNuNlpzSkxiRnlCay9QZXNvN0U1QmMrZWRqbk56UkoxaTZoWGxFWE9DdDgK",
+      "endpoints": [
+        "https://raw.githubusercontent.com/Echolzt17/Fusion/main/updates/stable.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      },
+      "requireSignedVersion": true
+    }
+  }
+}

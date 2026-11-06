@@ -1,0 +1,4 @@
+.conversation-guide{margin:0 0 14px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--subsurface);color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.conversation-guide p{margin:0}
+.conversation-guide p+p{margin-top:5px}
+.service-grid .conversation-guide{margin-top:14px}

@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/pool-core", "crates/report-protocol", "crates/report-server", "src-tauri"]
+resolver = "2"

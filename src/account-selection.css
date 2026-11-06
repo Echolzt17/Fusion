@@ -1,0 +1,59 @@
+/* Nawsome/cowardly-squid-50 (MIT): separated planes, adapted to the
+   persistent current-account state. Keep the information face upright. */
+.account-list {
+  column-gap: 30px;
+  row-gap: 32px;
+  padding: 10px 12px 12px 2px;
+}
+
+.account {
+  position: relative;
+  transition: transform .5s ease, box-shadow .5s ease, border-color .5s ease;
+}
+
+.account.active-account {
+  --account-depth-front: color-mix(in srgb, var(--surface) 92%, var(--accent));
+  --account-depth-back: color-mix(in srgb, var(--surface) 84%, var(--accent));
+  --account-depth-rim: color-mix(in srgb, #049fbb 55%, var(--accent));
+  border-color: var(--accent);
+  transform: translate(-2px, -8px);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    4px 6px 0 0 var(--account-depth-front),
+    4px 6px 0 1px var(--account-depth-rim),
+    9px 13px 0 0 var(--account-depth-back),
+    9px 13px 0 1px var(--account-depth-rim),
+    0 22px 34px -12px color-mix(in srgb, var(--accent) 36%, transparent),
+    0 18px 25px -16px #0008;
+}
+
+.account.active-account::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 1px 1px 0 #fff8;
+  pointer-events: none;
+}
+
+.account.active-account .account-selection-tags em:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.account.active-account .account-selection-tags em:first-child::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account { transition: none; }
+}

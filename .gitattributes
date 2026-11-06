@@ -1,0 +1,2 @@
+# The updater fixture signature binds these exact bytes across Windows checkouts.
+src-tauri/src/updates/fixtures/payload -text

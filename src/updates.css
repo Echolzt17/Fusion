@@ -1,0 +1,38 @@
+/* catraco/short-starfish-66, cssbuttons-io/massive-mayfly-74 and
+   vinodjangid07/lazy-rattlesnake-93 (MIT), scoped to Fusion updates. */
+.sidebar-bottom:has(.repository-link){display:flex;flex-direction:column;align-items:center;padding:24px 0 8px;flex-shrink:0}
+.header-update{display:grid;place-items:center;width:44px;height:44px;flex-shrink:0;position:relative}
+button.update-press{--press-main:var(--accent);--press-back:color-mix(in srgb,var(--accent) 52%,#161322);position:relative;isolation:isolate;display:grid;place-items:center;width:44px;height:44px;min-height:44px;flex-shrink:0;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer;user-select:none;touch-action:manipulation;transition:opacity .3s}
+.update-visual{display:block;position:relative;width:30px;height:25px;border-radius:100%;outline:4px solid color-mix(in srgb,var(--press-main) 24%,transparent)}
+button.update-press.has-update{--press-main:#ff5a78;--press-back:#96323c}
+button.update-press.has-error{--press-main:var(--danger,#dd586b)}
+button.update-press:hover:not(:disabled){background:transparent}
+.update-back{position:absolute;inset:0;background:var(--press-back);border-radius:100%}
+.update-front{position:absolute;inset:0;display:grid;place-items:center;border:.5px solid var(--press-back);border-radius:100%;color:#fff;background:linear-gradient(0deg,color-mix(in srgb,var(--press-main) 65%,var(--press-back)) 20%,var(--press-main) 65%);box-shadow:0 3px 6px -1.2px color-mix(in srgb,var(--press-back) 50%,transparent);transform:translateY(-15%);transition:transform .15s,box-shadow .15s}
+.update-front svg{width:12px;height:12px}
+.update-press:active:not(:disabled) .update-front{transform:translateY(0);box-shadow:0 0}
+.update-press:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.update-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+button.repository-link{position:relative;display:inline-block;width:154px;height:42px;min-height:0;flex-shrink:0;padding:0;border:0;border-radius:24px;background:transparent;font:700 11px var(--font-ui);cursor:pointer}
+button.repository-link:hover:not(:disabled){background:transparent}
+.repository-circle{position:relative;display:block;width:42px;height:42px;border-radius:26px;background:color-mix(in srgb,var(--accent) 28%,var(--text));transition:width .45s cubic-bezier(.65,0,.076,1)}
+.repository-arrow{position:absolute;top:0;bottom:0;margin:auto;left:10px;width:16px;height:2px;background:none;transition:transform .45s,background .45s}
+.repository-arrow::before{content:"";position:absolute;top:-4px;right:1px;width:8px;height:8px;border-top:2px solid var(--surface);border-right:2px solid var(--surface);transform:rotate(45deg)}
+.repository-text{position:absolute;inset:0;margin-left:30px;display:grid;place-items:center;color:var(--text);transition:color .45s;white-space:nowrap}
+.repository-link:is(:hover,:focus-visible) .repository-circle{width:100%}.repository-link:is(:hover,:focus-visible) .repository-arrow{background:var(--surface);transform:translateX(12px)}.repository-link:is(:hover,:focus-visible) .repository-text{color:var(--surface)}
+dialog.overlay:has(.update-card){inset:0;display:grid;place-items:center;padding:24px;background:transparent}
+dialog.overlay:has(.update-card)::backdrop{background:#08091480;backdrop-filter:blur(8px)}
+.update-card{display:flex;flex-direction:column;align-items:center;gap:13px;width:min(440px,100%);max-height:calc(100dvh - 48px);padding:28px 30px;border:1px solid var(--border);border-radius:14px;background:var(--surface);color:var(--text);box-shadow:2px 2px 30px #0003;overflow:hidden}
+.update-card-icon{display:grid;place-items:center;color:var(--accent);flex-shrink:0}.update-card-icon svg{width:46px;height:46px}
+.update-card h2{font-size:20px;font-weight:800;text-align:center;margin:0}.update-card p{margin:0}.update-versions{font-size:12px;color:var(--muted);text-align:center}.update-versions strong{color:var(--accent)}
+.update-card-body{overflow-y:auto;min-height:0;width:100%;overscroll-behavior:contain}.update-notes{overflow-wrap:anywhere;font-size:13px;font-weight:500;line-height:1.75}.update-notes h3{font-weight:800;margin:12px 0 5px;font-size:13px}.update-notes p{margin:5px 0}.update-note-item{padding-left:14px;position:relative}.update-note-item::before{content:"•";position:absolute;left:0;color:var(--accent)}
+.update-card .update-caution{flex-shrink:0;font-size:11px;line-height:1.65;color:var(--muted);text-align:center}.update-card-actions{display:flex;justify-content:center;gap:20px;flex-shrink:0;width:100%}.update-card-actions button{min-width:108px;min-height:34px;padding:8px 15px;border:0;border-radius:20px;font-weight:600;font-size:12px;transition:background .2s}
+button.update-now{background:var(--accent);color:#fff}button.update-now:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 80%,white)}button.update-later{background:var(--subsurface);color:var(--text)}button.update-later:hover:not(:disabled){background:color-mix(in srgb,var(--subsurface) 80%,var(--text))}
+button.update-repair{padding:2px 8px;border:0;background:transparent;color:var(--muted);font-size:11px;min-height:28px;flex-shrink:0}
+.update-progress{font-size:12px;margin:12px 0}.update-progress progress{width:100%;accent-color:var(--accent);margin:10px 0 4px}.update-progress small{color:var(--muted)}.update-card .update-error{color:var(--danger,#dd586b);font-size:12px;line-height:1.8;margin:10px 0;overflow-wrap:anywhere}
+@media(max-width:850px){button.repository-link{width:138px;font-size:10px}}
+@media(max-width:650px){button.repository-link{width:36px;height:36px}.repository-circle{width:36px;height:36px}.repository-text{display:none}.repository-arrow{left:9px}.repository-link:is(:hover,:focus-visible) .repository-arrow{transform:translateX(2px)}}
+@media(max-height:560px),(max-width:480px){dialog.overlay:has(.update-card){padding:12px}.update-card{padding:18px;gap:10px;max-height:calc(100dvh - 24px)}.update-card-icon svg{width:30px;height:30px}.update-card-actions{gap:12px}.update-card-actions button{min-width:0;flex:1}}
+@media(prefers-reduced-motion:reduce){.update-press *,.repository-link *{transition:none!important}}
+
+:root[data-theme=dark] button.update-now{color:#171327}

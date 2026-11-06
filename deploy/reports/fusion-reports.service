@@ -1,0 +1,34 @@
+[Unit]
+Description=Fusion private error report receiver
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=fusion-reports
+Group=fusion-reports
+WorkingDirectory=/var/lib/fusion-reports
+ExecStart=/opt/fusion-reports/fusion-report-server serve
+Restart=on-failure
+RestartSec=10
+Environment=FUSION_REPORT_DATA=/var/lib/fusion-reports
+Environment=FUSION_REPORT_ADMIN_FILE=/etc/fusion-reports/admin.key
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fusion-reports
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=1024
+TimeoutStopSec=65
+
+[Install]
+WantedBy=multi-user.target

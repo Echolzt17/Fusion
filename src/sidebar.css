@@ -1,0 +1,9 @@
+/* Adapted from kamehame-ha/chilly-snake-91 (MIT).
+   Theme, readable blur and keyboard support: THIRD_PARTY_NOTICES.md. */
+.sidebar-nav{gap:8px}
+.sidebar-nav>button{position:relative;transform-origin:center;transition:transform .4s ease,filter .4s ease,background .4s ease,border-color .4s ease,color .4s ease}
+.sidebar-nav>button:hover,.sidebar-nav>button:focus-visible{z-index:1;transform:scale(1.04);filter:none;background:color-mix(in srgb,var(--accent) 10%,var(--surface));border-color:color-mix(in srgb,var(--accent) 45%,var(--border));color:var(--text)}
+.sidebar-nav:has(>button:hover)>button:not(:hover),.sidebar-nav:has(>button:focus-visible)>button:not(:focus-visible){transform:scale(.97);filter:blur(.6px)}
+.sidebar-nav>button.selected{color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--surface));border-color:color-mix(in srgb,var(--accent) 28%,var(--border))}
+.sidebar-nav>button:active{transform:scale(1.01)}
+@media(prefers-reduced-motion:reduce){.sidebar-nav>button{transition:none}.sidebar-nav>button:hover,.sidebar-nav>button:focus-visible,.sidebar-nav>button:active,.sidebar-nav:has(>button:hover)>button:not(:hover),.sidebar-nav:has(>button:focus-visible)>button:not(:focus-visible){transform:none;filter:none}}

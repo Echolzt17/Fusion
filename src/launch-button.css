@@ -1,0 +1,30 @@
+/* marcelodolza/fat-zebra-11, MIT; theme and real asynchronous state. */
+button.fusion-launch{--launch-top:color-mix(in srgb,var(--surface) 87%,white);--launch-bottom:color-mix(in srgb,var(--surface) 94%,black);position:relative;isolation:isolate;min-width:200px;height:64px;padding:18px 24px;border:0;border-radius:14px;background:transparent;color:var(--text);font:600 16px var(--font-ui);cursor:pointer;box-shadow:0 .5px .5px 1px #ffffff30,0 10px 20px #0003,0 4px 5px #0001;transition:transform .3s,box-shadow .3s}
+button.fusion-launch::after{content:"";position:absolute;inset:0;border-radius:inherit;border:2.5px solid transparent;background:linear-gradient(var(--launch-top),var(--launch-bottom)) padding-box,linear-gradient(#0002,#0007) border-box;z-index:0;transition:transform .4s,box-shadow .4s}
+button.fusion-launch::before{content:"";position:absolute;inset:7px 6px 6px;background:linear-gradient(to top,var(--launch-top),var(--launch-bottom));border-radius:30px;filter:blur(.5px);z-index:2}
+button.fusion-launch:hover:not(:disabled){background:transparent;transform:scale(1.02);box-shadow:0 0 1px 2px #ffffff30,0 15px 30px #0003}
+.fusion-launch:hover:not(:disabled)::after{transform:scale(1.05,1.1);box-shadow:inset 0 -1px 3px #ffffff50}
+button.fusion-launch:active:not(:disabled){transform:scale(1)}
+.launch-outline{position:absolute;inset:-2px -3.5px;overflow:hidden;border-radius:inherit;z-index:1;opacity:0;transition:opacity .4s}
+.launch-outline::before{content:"";position:absolute;inset:-150%;background:conic-gradient(from 180deg,transparent 60%,var(--accent) 80%,transparent 100%);animation:launch-spin 2s linear infinite;animation-play-state:paused}
+.fusion-launch:is(:hover,:focus-visible):not(:disabled) .launch-outline,.fusion-launch.is-working .launch-outline{opacity:1}
+.fusion-launch:is(:hover,:focus-visible):not(:disabled) .launch-outline::before,.fusion-launch.is-working .launch-outline::before{animation-play-state:running}
+.launch-state{padding-left:30px;display:flex;align-items:center;position:relative;z-index:3;min-height:24px;justify-content:center}
+.launch-icon{position:absolute;left:0;top:0;bottom:0;display:flex;align-items:center;transition:transform .3s}
+.launch-icon svg{width:22px;height:22px;overflow:visible;animation:launch-land .6s both}
+.fusion-launch:hover:not(:disabled) .launch-icon{transform:rotate(35deg) scale(1.1)}
+.launch-letters{display:flex;align-items:center;justify-content:center}
+.launch-letters>span{display:block;animation:launch-letter .8s both calc(var(--i)*.03s)}
+.fusion-launch:hover:not(:disabled) .launch-letters>span{animation:launch-wave .5s both calc(var(--i)*.04s)}
+.fusion-launch.is-working .launch-icon svg{animation:launch-takeoff 1s both}
+.fusion-launch.is-working .launch-icon::before{content:"";position:absolute;top:50%;height:2px;left:-5px;background:linear-gradient(to right,transparent,var(--accent));animation:launch-trail .8s both}
+.fusion-launch.is-complete .launch-icon svg{animation:launch-complete .8s both;color:var(--accent)}
+.fusion-launch:disabled{cursor:default}.fusion-launch.is-working:disabled{opacity:1}
+@keyframes launch-spin{to{transform:rotate(360deg)}}
+@keyframes launch-wave{30%{transform:translateY(4px)}50%{transform:translateY(-3px);color:var(--accent)}100%{transform:translateY(0)}}
+@keyframes launch-letter{0%{opacity:0;transform:translate(5px,-20px) rotate(-90deg);filter:blur(5px);color:var(--accent)}50%{opacity:1;transform:translateY(-3px);filter:blur(0)}100%{opacity:1;transform:none}}
+@keyframes launch-land{from{transform:translate(-40px,20px) rotate(-50deg) scale(2);opacity:0;filter:blur(3px)}to{transform:none;opacity:1;filter:blur(0)}}
+@keyframes launch-takeoff{0%{opacity:1}60%{opacity:1;transform:translateX(50px) rotate(45deg) scale(2)}100%{opacity:0;transform:translateX(140px) rotate(45deg) scale(0)}}
+@keyframes launch-trail{0%{width:0;opacity:1}60%{width:65px;opacity:.7}100%{width:140px;opacity:0}}
+@keyframes launch-complete{0%{opacity:0;transform:scale(4) rotate(-40deg);filter:blur(4px)}50%{opacity:1;transform:scale(.7);filter:blur(0)}100%{transform:scale(1);opacity:1}}
+@media(prefers-reduced-motion:reduce){.fusion-launch *,.fusion-launch::before,.fusion-launch::after{animation:none!important;transition:none!important}.fusion-launch:hover:not(:disabled),.fusion-launch:hover:not(:disabled)::after{transform:none}}

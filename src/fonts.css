@@ -1,0 +1,16 @@
+/* Original upstream WOFF2 files; SIL OFL 1.1 notices are shipped in /fonts. */
+@font-face {
+  font-family: Inter;
+  src: url('/fonts/InterVariable-4.1.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Han Sans CN';
+  src: url('/fonts/SourceHanSansCN-2.005.woff2') format('woff2');
+  font-weight: 250 900;
+  font-style: normal;
+  font-display: swap;
+}
+:root { --font-ui: Inter, 'Source Han Sans CN', 'Segoe UI', 'Microsoft YaHei', sans-serif; }

@@ -1,0 +1,14 @@
+{
+  "identifier": "widget",
+  "windows": [
+    "pool-widget"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-widget-snapshot",
+    "allow-widget-set-expanded",
+    "allow-widget-drag",
+    "allow-widget-open-console"
+  ]
+}

@@ -1,0 +1,39 @@
+.priority-trigger{min-height:42px;white-space:nowrap;gap:10px}
+.priority-trigger strong{font-weight:500;color:var(--accent)}
+.priority-separator{color:var(--muted);padding:0 3px}
+.priority-trigger svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.priority-icon{color:var(--muted)}
+.priority-trigger .priority-chevron{width:12px;color:var(--muted);transition:transform .25s}
+.priority-trigger.expanded{border-color:var(--accent)}
+.priority-trigger.expanded .priority-chevron{transform:rotate(180deg)}
+.priority-popover{position:fixed;z-index:10;border:1px solid var(--border);border-radius:12px;padding:8px;background:var(--surface);box-shadow:0 16px 48px #0003;overflow:auto;animation:priority-reveal .18s ease-out}
+/* Smit-Prajapati/quick-panther-98 (MIT), source supplied by the user.
+   Preserve its glowing vertical glider and spring curve; adapt to five policies. */
+.priority-popover .radio-container{--main-color:var(--accent);--main-color-opacity:color-mix(in srgb,var(--accent) 12%,transparent);--total-radio:5;display:flex;flex-direction:column;position:relative;padding-left:8px}
+.priority-options input{appearance:none;position:absolute;width:1px;height:1px;margin:0;padding:0;border:0;overflow:hidden;clip-path:inset(50%)}
+.priority-option{position:relative;z-index:1;display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:7px;cursor:pointer;height:62px;flex-shrink:0;color:var(--muted);transition:color .3s ease-in-out,background .3s ease-in-out}
+.priority-option:hover{background:color-mix(in srgb,var(--accent) 4%,transparent)}
+.priority-options input:checked+.priority-option{color:var(--main-color)}
+.priority-options input:focus-visible+.priority-option{outline:2px solid var(--accent);outline-offset:-2px}
+.priority-options input:disabled+.priority-option{cursor:wait}
+.radio-container .glider-container{position:absolute;left:0;top:0;bottom:0;width:1px;pointer-events:none;background:linear-gradient(0deg,transparent 0%,var(--border) 50%,transparent 100%)}
+.radio-container .glider{position:relative;height:calc(100% / var(--total-radio));width:100%;background:linear-gradient(0deg,transparent 0%,var(--main-color) 50%,transparent 100%);transition:transform .5s cubic-bezier(.37,1.95,.66,.56)}
+.radio-container .glider:before{content:'';position:absolute;height:60%;width:300%;top:50%;transform:translateY(-50%);background:var(--main-color);filter:blur(10px)}
+.radio-container .glider:after{content:'';position:absolute;left:0;height:100%;width:150px;background:linear-gradient(90deg,var(--main-color-opacity) 0%,transparent 100%)}
+.radio-container input:nth-of-type(1):checked~.glider-container .glider{transform:translateY(0)}
+.radio-container input:nth-of-type(2):checked~.glider-container .glider{transform:translateY(100%)}
+.radio-container input:nth-of-type(3):checked~.glider-container .glider{transform:translateY(200%)}
+.radio-container input:nth-of-type(4):checked~.glider-container .glider{transform:translateY(300%)}
+.radio-container input:nth-of-type(5):checked~.glider-container .glider{transform:translateY(400%)}
+.priority-copy{display:grid;gap:4px;min-width:0}
+.priority-copy strong{font-size:12px;font-weight:500;color:inherit}
+.priority-copy small{font-size:10px;color:var(--muted);line-height:1.5}
+.priority-check{margin-left:auto;color:var(--accent);opacity:0;transform:scale(.6);transition:.2s}
+.priority-options input:checked+label .priority-check{opacity:1;transform:scale(1)}
+.priority-caption{font-size:10px;color:var(--muted);margin:10px 5px 3px;line-height:1.6}
+.accounts-heading{flex-wrap:wrap}.accounts-heading>.button-row{margin-left:auto}
+.account-selection-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}.account-selection-tags em{font-size:9px;font-style:normal;color:var(--accent);padding:2px 5px;border:1px solid var(--border);border-radius:4px}
+.fields .priority-trigger{margin-top:8px;width:100%}
+.priority-setting>span{font-size:12px;color:var(--muted)}
+@keyframes priority-reveal{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.priority-popover{animation:none}.priority-popover *,.priority-trigger *{transition:none!important}}
