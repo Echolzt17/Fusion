@@ -1,6 +1,6 @@
 [package]
 name = "personal-codex-pool"
-version = "1.0.10"
+version = "1.0.11"
 description = "Personal local Codex account pool"
 edition = "2021"
 

@@ -2,7 +2,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "network_status", "network_import", "network_refresh", "network_remove",
-            "network_save_settings", "network_select", "network_check", "network_set_enabled", "network_retry",
+            "network_save_settings", "network_select", "network_select_subscription", "network_check", "network_set_enabled", "network_retry",
             "ai_pricing",
             "open_pricing_website",
             "api_sources",

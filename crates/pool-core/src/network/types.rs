@@ -100,9 +100,7 @@ impl NodeHealth {
         self.cooldown_until.is_none_or(|until| until <= at) && self.consecutive_failures < 3
     }
     pub fn status(&self, at: i64) -> &'static str {
-        if self.cooldown_until.is_some_and(|until| until > at) {
-            "unhealthy"
-        } else if self.consecutive_failures >= 3 {
+        if self.cooldown_until.is_some_and(|until| until > at) || self.consecutive_failures >= 3 {
             "unhealthy"
         } else if self.consecutive_failures > 0 {
             "degraded"
@@ -143,6 +141,8 @@ pub struct RegionSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkStatus {
+    pub selected_subscription_id: Option<String>,
+    pub subscriptions: Vec<SubscriptionView>,
     pub settings: NetworkSettings,
     pub kernel_running: bool,
     pub current_node_id: Option<String>,
@@ -157,6 +157,16 @@ pub struct NetworkStatus {
     pub active_requests: usize,
     pub skipped_nodes: usize,
     pub import_warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionView {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub node_count: usize,
+    pub updated_at: i64,
 }
 
 // URL and content are secret input, never Debug or returned to the UI.

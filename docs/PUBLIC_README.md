@@ -6,9 +6,9 @@
 
 Windows 本机账号池 · 会话固定账号 · 额度与用量可见 · 一键启停
 
-**当前版本：1.0.10 · Windows 10 / 11 x64**
+**当前版本：1.0.11 · Windows 10 / 11 x64**
 
-[下载 v1.0.10 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.10/Fusion_1.0.10_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.10) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.11 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.11/Fusion_1.0.11_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.11) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
@@ -27,12 +27,18 @@ Fusion 是面向 Windows 本机 Codex 桌面客户端的账号池工具。添加
 
 每个账号仍受自身套餐、模型权限、额度和上游服务状态限制。Fusion 不合并订阅额度，也不提高单账号限额。每台电脑独立运行、独立授权。Codex 订阅池与手动 API 来源分别管理，没有跨厂商订阅池、API Key 自动池化或跨电脑账号同步。
 
-## v1.0.10 的改进
+## v1.0.11 的改进
+
+- **统一工作区入口。** 胶囊按钮融合 Poppins 字体、三箭头悬停和发光滑块下拉，在 Codex / Claude Code / API 间切换查看。
+- **账单式多订阅管理。** 可保存多个代理订阅，分别更新和移除，明确选用一个；新增不会覆盖或切走当前订阅，地区/排序等低频操作收进高级设置。
+- **切换与停止更可靠。** 选用订阅前等待旧请求读取完成，失败保留原订阅；阻止失效的内核启动任务在关闭或切换后复活。
+
+以下能力沿用此前版本：
 
 - **订阅价格与充值渠道。** 一张卡按软件和套餐查看地区订阅价格，默认 Codex / ChatGPT，每日首次打开更新；另有 PriceAI 渠道比价入口。
 - **更集中的操作。** 移除首页常驻说明和设置页重复入口，首页保留一键启停。GitHub 公开更新下载遇到临时故障时有限重试，仍先验签再安装。
 - **独立客户端与 API 来源。** Codex 保留订阅账号池并支持手动 Responses API 来源，Claude Code 支持 Messages API 来源；密钥存在当前 Windows 凭据管理器，选择视图不会自动启用。
-- **账号池专用网络。** 可导入一个 Clash/Mihomo 订阅，选择地区与备用顺序，使用固定版本独立内核；仅影响原 Codex 订阅池，不更改系统代理、DNS、TUN 或 API 来源设置。
+- **账号池专用网络。** 可保存多个 Clash/Mihomo 订阅，每次选用一个，选择地区与备用顺序，使用固定版本独立内核；仅影响原 Codex 订阅池，不更改系统代理、DNS、TUN 或 API 来源设置。
 - **新聊天可读交接与挂件修复候选。** 通过明确的准备、创建、发送操作续接可读任务信息，旧账号密文和上下文引用不跨账号搬运；挂件补充握手、去重和失联恢复。
 
 收到 429、已经发送或输出、工具调用及执行状态不明的业务请求不自动重放。当前更新重试仅用于匿名公开更新下载，不扩大业务请求重试。
@@ -47,6 +53,8 @@ Fusion 是面向 Windows 本机 Codex 桌面客户端的账号池工具。添加
 **切回官方接入后，池内旧聊天不能直接改用官方账号续接。** 要继续原池聊天，请重新启动账号池；要使用官方账号，请在官方接入下手动打开 Codex，新建聊天并带入必要的任务摘要。Fusion 不迁移加密上下文。
 
 顶部更新按钮只检查并展示说明，点击“立即更新”才下载。下载与修复材料准备期间可稍后更新；安全安装收尾开始后等待完成。账号池已关闭且已脱离时，Fusion 更新不关闭或重启独立运行的 Codex；账号池开启时先完成正常关闭，更新后保持关闭，需点击“启动账号池”才打开客户端。手动覆盖安装前，先正常关闭账号池并退出 Fusion。
+
+代理订阅目录升级为版本 2，旧单订阅会保留。使用新版保存后，旧版会按向前保护拒绝读取新版网络目录，请继续使用新版；这不等于账号数据库 schema 发生迁移。真实 API 旧聊天续接及用量等仍需验收，切换 API 来源请新建聊天。
 
 ## 数据与安全边界
 
@@ -64,12 +72,13 @@ Fusion 是面向 Windows 本机 Codex 桌面客户端的账号池工具。添加
 
 ## 源码与继续开发
 
-本仓库从 v1.0.10 起同时提供经过审查的应用源码、构建配置、锁文件、测试、字体与第三方许可说明，方便在其他 Windows 电脑继续开发。公开源码采用当前开发快照，不包含原维护机的私有 Git 历史、账号、运行数据库、诊断材料或发布私钥。
+本仓库从 v1.0.9 起同时提供经过审查的应用源码、构建配置、锁文件、测试、字体与第三方许可说明，方便在其他 Windows 电脑继续开发。公开源码采用当前开发快照，不包含原维护机的私有 Git 历史、账号、运行数据库、诊断材料或发布私钥。
 
 ```powershell
 git clone https://github.com/Echolzt17/Fusion.git
 cd Fusion
 npm ci
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-network-kernel.ps1
 npm run check
 npm test
 npm run web:build

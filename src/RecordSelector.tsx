@@ -1,10 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import './record-selector.css';
 
 type Option = { value: string; label: string; detail?: string };
 
-export function RecordSelector({ label, value, options, onChange }: { label: string; value: string; options: Option[]; onChange: (value: string) => void }) {
+export function RecordSelector({ label, value, options, onChange, closeOnSelect = false, align = 'end', triggerIcon }: { label: string; value: string; options: Option[]; onChange: (value: string) => void; closeOnSelect?: boolean; align?: 'start' | 'end'; triggerIcon?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [position, setPosition] = useState<CSSProperties>({});
@@ -21,6 +21,7 @@ export function RecordSelector({ label, value, options, onChange }: { label: str
     if (!option) return;
     setActive(index);
     if (option.value !== value) onChange(option.value);
+    if (closeOnSelect) setOpen(false);
   }
   function keyDown(event: KeyboardEvent) {
     if (event.key === 'Escape' && open) {
@@ -47,13 +48,13 @@ export function RecordSelector({ label, value, options, onChange }: { label: str
       const upwards = below < height && above > below;
       const maxHeight = Math.max(0, Math.min(height, upwards ? above : below));
       const width = Math.min(Math.max(anchor.width, 260), window.innerWidth - 24);
-      setPosition({ left: Math.max(12, Math.min(anchor.right - width, window.innerWidth - width - 12)), top: upwards ? anchor.top - maxHeight - 6 : anchor.bottom + 6, width, maxHeight });
+      setPosition({ left: Math.max(12, Math.min(align === 'start' ? anchor.left : anchor.right - width, window.innerWidth - width - 12)), top: upwards ? anchor.top - maxHeight - 6 : anchor.bottom + 6, width, maxHeight });
     };
     place();
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open, options.length]);
+  }, [open, options.length, align]);
 
   useEffect(() => {
     if (!open) return;
@@ -75,11 +76,11 @@ export function RecordSelector({ label, value, options, onChange }: { label: str
 
   return <div className="record-selector">
     <button ref={trigger} className="record-select-trigger" role="combobox" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? id : undefined} aria-activedescendant={open ? `${id}-${active}` : undefined} onClick={() => open ? setOpen(false) : show()} onKeyDown={keyDown} onBlur={() => setOpen(false)}>
-      <span>{current?.label || '已选条件暂无记录'}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+      <span>{current?.label || '已选条件暂无记录'}</span>{triggerIcon ?? <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>}
     </button>
     {open && createPortal(<div className="record-select-popover" ref={panel} style={position} onMouseDown={event => event.preventDefault()}>
-      <div ref={list} id={id} role="listbox" aria-label={label} className="record-select-options" style={{ '--record-selected': selected } as CSSProperties}>
-        {options.map((option, index) => <div key={option.value} id={`${id}-${index}`} role="option" aria-selected={value === option.value} className={'record-select-option' + (active === index ? ' active' : '')} onClick={() => choose(index)}>
+      <div ref={list} id={id} role="listbox" aria-label={label} className="record-select-options" style={{ '--record-selected': closeOnSelect ? active : selected } as CSSProperties}>
+        {options.map((option, index) => <div key={option.value} id={`${id}-${index}`} role="option" aria-selected={value === option.value} className={'record-select-option' + (active === index ? ' active' : '')} onPointerMove={() => { if (closeOnSelect) setActive(index); }} onClick={() => choose(index)}>
           <span className="record-select-copy"><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span><span className="record-select-check" aria-hidden="true">✓</span>
         </div>)}
         <div className="record-select-track" aria-hidden="true"><div className="record-select-glider" /></div>

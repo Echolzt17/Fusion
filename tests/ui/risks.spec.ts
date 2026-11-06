@@ -465,7 +465,7 @@ test('unified inbox stays still without unread messages and detail has only OKAY
   expect(await animation()).toEqual(Array(5).fill('none'));
   await trigger.click();
   await expect(page.locator('.notification-row')).toHaveCount(1);
-  await page.getByRole('heading', { name: '账号控制台', exact: true }).click();
+  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('button', { name: '账号控制台', exact: true }).click();
   await expect(page.getByRole('region', { name: '通知列表' })).toHaveCount(0);
   await page.getByRole('switch').focus();
   await page.getByRole('switch').press('Space');

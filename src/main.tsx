@@ -27,7 +27,7 @@ import { ErrorReport } from './ErrorReport';
 import { UsageDashboard, type DashboardUsage } from './UsageDashboard';
 import { NetworkCards } from './NetworkCards';
 import { PricingCards, usePricing } from './PricingCards';
-import { ClientSwitcher, SourceModeSwitcher, ApiWorkspace, ClaudeOfficialWorkspace, type ClientId, type SourceMode, type ClientStatus } from './ClientWorkspace';
+import { WorkspaceSwitcher, ApiWorkspace, ClaudeOfficialWorkspace, type ClientId, type WorkspaceView, type ClientStatus } from './ClientWorkspace';
 
 type ResetCredits = { available_count: number; credits: { id: string; reset_type: string; status: string; expires_at: string | null }[] };
 type Settings = { port: number; concurrency: number; fixedAccount: string | null; selectionPolicy: SelectionPolicy };
@@ -64,11 +64,11 @@ function App() {
   const [dark, setDark] = useState(() => { try { const saved = localStorage.getItem('pool-theme'); return saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; } });
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; try { localStorage.setItem('pool-theme', dark ? 'dark' : 'light'); } catch {} }, [dark]);
   const [page, setPage] = useState<'accounts' | 'service' | 'logs'>('accounts');
-  const [client, setClient] = useState<ClientId>('codex');
-  const [sourceModes, setSourceModes] = useState<Record<ClientId, SourceMode>>({ codex: 'subscription', claudeCode: 'api' });
+  const [workspace, setWorkspace] = useState<WorkspaceView>('codex');
+  const [apiClient, setApiClient] = useState<ClientId>('codex');
   const [apiStatuses, setApiStatuses] = useState<ClientStatus[]>([]);
-  const sourceMode = sourceModes[client];
-  const showPool = client === 'codex' && sourceMode === 'subscription';
+  const client = workspace === 'api' ? apiClient : workspace;
+  const showPool = workspace === 'codex';
   const pageRef = useRef(page); pageRef.current = page;
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [settings, setSettings] = useState<Settings>({ port: 18765, concurrency: 4, fixedAccount: null, selectionPolicy: 'auto' });
@@ -265,14 +265,12 @@ function App() {
       <div className="sidebar-bottom"><RepositoryButton controller={updates} /></div>
     </aside>
     <main>
-      <header><div><h1>{activeLabel}</h1></div><div className="header-actions"><UpdateButton controller={updates} /><NotificationCenter {...notifications} /><ThemeSwitch dark={dark} onChange={() => setDark(v => !v)} /><span className="local-tag"><span className={'dot ' + (apiStatus?.mode === 'running' || client === 'codex' && service.running ? 'on' : '')} />{apiStatus ? apiStateNames[apiStatus.mode] : client === 'claudeCode' ? 'Claude Code API 已关闭' : poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '正在启动账号池' : connection.mode === 'closing' ? '正在关闭账号池' : connection.mode === 'recovery_required' ? '接入需要恢复' : connection.mode === 'off' ? '账号池已关闭' : '正在读取接入状态'}</span></div></header>
+      <header className="cw-app-header"><div className="cw-workspace-heading"><WorkspaceSwitcher value={workspace} onChange={setWorkspace} />{page !== 'accounts' && <h1 className="cw-page-label">{activeLabel}</h1>}</div><div className="header-actions"><UpdateButton controller={updates} /><NotificationCenter {...notifications} /><ThemeSwitch dark={dark} onChange={() => setDark(v => !v)} /><span className="local-tag"><span className={'dot ' + (apiStatus?.mode === 'running' || client === 'codex' && service.running ? 'on' : '')} />{apiStatus ? apiStateNames[apiStatus.mode] : client === 'claudeCode' ? 'Claude Code API 已关闭' : poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '正在启动账号池' : connection.mode === 'closing' ? '正在关闭账号池' : connection.mode === 'recovery_required' ? '接入需要恢复' : connection.mode === 'off' ? '账号池已关闭' : '正在读取接入状态'}</span></div></header>
       {(shutdown || transitioning) && <section role="status" aria-live="polite" className="shutdown-progress"><h2>{shutdown === 'exit' ? '正在退出 Fusion' : connection.mode === 'enabling' ? '正在启动账号池' : '正在关闭账号池'}</h2><p>{phaseLabel[connection.phase || ''] || '正在准备切换…'} · 活动请求 {service.activeRequests} 个 · 已等待 {connection.operationStartedAt ? Math.max(0, Math.floor(clock / 1000 - connection.operationStartedAt)) : 0} 秒</p></section>}
       {failed && <section role="alert"><h2>{retryStart ? '启动未完成' : '关闭未完成'}</h2><p>{startError || connection.error || '客户端切换尚未完成，请重试。'}</p>{retryStart && (connection.configured || connection.recoveryPending || poolOn) && <button disabled={busy || transitioning} onClick={() => void run(() => openShutdown('stop'))}>关闭账号池</button>}</section>}
-      <ClientSwitcher value={client} onChange={setClient} />
-      <SourceModeSwitcher client={client} value={sourceMode} onChange={mode => setSourceModes(previous => ({ ...previous, [client]: mode }))} />
       {apiStatus && <div className="conversation-guide" role="status">{client === 'codex' ? 'Codex' : 'Claude Code'} 当前接入：{apiStateNames[apiStatus.mode]}{apiStatus.error ? ` · ${apiStatus.error}` : ''}{showPool ? '。启动账号池将等待当前 API 请求完成并切换接入。' : ''}</div>}
-      {sourceMode === 'api' && <ApiWorkspace key={client} client={client} page={page} poolMode={poolOn} poolBusy={updating} onSwitchToPool={() => setSourceModes(previous => ({ ...previous, codex: 'subscription' }))} />}
-      {client === 'claudeCode' && sourceMode === 'subscription' && <ClaudeOfficialWorkspace page={page} />}
+      {workspace === 'api' && <ApiWorkspace client={apiClient} onClientChange={setApiClient} page={page} poolMode={poolOn} poolBusy={updating} onSwitchToPool={() => setWorkspace('codex')} />}
+      {workspace === 'claudeCode' && <ClaudeOfficialWorkspace page={page} />}
       {showPool && page === 'accounts' && <div className="accounts-page"><div className="dashboard-summary">
         <section className="launch-panel"><div className="launch-copy"><h2>{poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '账号池启动中' : connection.mode === 'closing' ? '账号池关闭中' : connection.mode === 'recovery_required' ? '账号池需要恢复' : '账号池未启动'}</h2><div className="button-row"><LaunchButton label={poolActionLabel} running={poolOn} transitioning={transitioning} failed={failed} disabled={poolActionDisabled} aria-describedby={activationBlocked ? 'launch-blocked' : undefined} onClick={() => void run(poolAction)} /></div>{activationBlocked && <p id="launch-blocked" role="status">{activationBlocked}</p>}</div><PoolPrinter running={poolOn} /></section>
         <div className="overview-line"><span>可用账号 <b>{available} / {accounts.length}</b></span><span>{scheduling.preferredAccountId ? '手动优先' : '策略分配'}</span><span>用量已上报 <b>{num(measured)} / {num(requests)}</b> 次请求</span></div>

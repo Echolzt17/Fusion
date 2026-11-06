@@ -2,6 +2,8 @@
 
 本指南用于在另一台 Windows 电脑检出源码并继续开发。当前开发范围包括 Windows 本机 Codex 订阅账号池、Codex / Claude Code 独立客户端与手动 API 来源、账号池专用代理，以及明确操作的可读聊天交接。技术栈为 Tauri 2、Rust、React / TypeScript；不包含账号同步、跨厂商订阅池或 API Key 自动池化。
 
+1.0.11 增加胶囊工作区下拉、随包 Poppins 字体、账单式多订阅单选与原内核启动世代保护。代理目录仍使用原 kv 键，写入版本 2 后旧版按向前保护拒绝读取；请基于当前代码继续开发，不通过清除数据或关闭版本检查实现降级。
+
 ## 1. 准备环境
 
 - Windows 10 / 11 x64，以及 Git。
@@ -83,6 +85,8 @@ cargo test -p pool-core synthetic_large_history_scan_measurement -- --ignored --
 它报告构建模式、完整冷/未变化扫描、独立暖阶段采样和可取得的测试进程内存。调试构建的样本时间不能直接当作生产客户端性能；独立阶段样本不能简单相加。
 
 真实账号、原聊天续接、工具执行、在途排空、安装升级和挂件点击/中文输入仍需按 `docs/ACCEPTANCE.md` 在验收机确认。使用独立测试项目，不为验证而损坏真实配置或断开重要任务；记录实际结果和剩余问题。
+
+后续接手需保留待处理项：API 网关的 Claude 文字会话来源识别、Responses 可空 error 的成功归因、Messages 缓存输入用量合计，以及挂件原生 show 与 ready 的一致性。本轮 UI/多订阅发布不将这些项视为已修复；API 切换来源先新建聊天。相关模块为 `crates/pool-core/src/api_gateway.rs` 与 `src-tauri/src/widget.rs`，真实客户端结果继续单独记录。
 
 ## 6. 安装包与签名发布
 

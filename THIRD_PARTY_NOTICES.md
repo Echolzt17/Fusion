@@ -69,6 +69,12 @@
 
 请求记录的对话/结果下拉框也沿用上述 quick-panther-98 的发光光带及弹性滑块，使用同一主题强调色，适配动态选项数量、滚动、键盘选择和减少动态效果。沿用同一作者署名、来源和 MIT 许可。
 
+顶部 Codex / Claude Code / API 统一工作区下拉复用同一 quick-panther-98 本地组件，保留发光光带、弹性滑块和展开过渡，适配标题位置、选择后收起、键盘操作及明暗主题；沿用同一作者署名、来源和 MIT 许可。
+
+2026-11-07 顶部触发按钮融合 Li-Deheng/shy-moth-10：https://uiverse.io/Li-Deheng/shy-moth-10 ，Copyright - 2026 Li-Deheng（李德恒），MIT。源代码固定参考 uiverse-io/galaxy `adbd2adde0a299a3956ea288fb444ec01891ca41` 的 `Buttons/Li-Deheng_shy-moth-10.html`；保留胶囊外形、Poppins 600、三箭头依次流动及光晕/轮廓动画，用工作区名称替换 NEXT，颜色适配 Fusion 主题，点击展开上述 quick-panther-98 选择面板，并适配键盘、窄窗和减少动态效果。
+
+代理与节点账单式布局视觉参考 Cksunandh/slippery-gecko-23：https://uiverse.io/Cksunandh/slippery-gecko-23 ，Copyright - 2026 Cksunandh（Sunandh ck），该参考在 Uiverse 按 MIT 发布。依据原作者公开索引预览确认的单色收据、标题/日期、明细和突出汇总层级做本地适配；未获得原始 HTML/CSS，不将本地实现称为原源码移植或逐像素复刻。将商品/金额替换为实际订阅、节点数和当前出口，不引入虚构金额、购买或付款语义。
+
 请求记录的信息层级组件（2026-10-30 移植，沿用下方 MIT 许可）：
 
 - Copyright - 2026 LilaRest (Lila Rest)：https://uiverse.io/LilaRest/soft-baboon-75 。原始 HTML/CSS 固定参考 uiverse-io/galaxy `adbd2adde0a299a3956ea288fb444ec01891ca41` 的 `Radio-buttons/LilaRest_soft-baboon-75.html`；保留玻璃槽内外层、圆形选项、圆球的选中/未选中位移、阴影和 `800ms cubic-bezier(1,-0.4,0,1.4)`。按两个真实分类同比缩小几何尺寸和位移，中文名称独立排版，适配主题和减少动态效果。
@@ -118,6 +124,8 @@ Copyright Tauri Programme within The Commons Conservancy，MIT / Apache-2.0。
 ## 随包界面字体
 
 Inter 4.1 by the Inter Project Authors and Source Han Sans 2.005 by Adobe are distributed as unmodified upstream WOFF2 assets under SIL Open Font License 1.1. Inter source: https://github.com/rsms/inter/tree/v4.1 (docs/font-files/InterVariable.woff2). Source Han Sans source: https://github.com/adobe-fonts/source-han-sans/tree/2.005R (Variable/WOFF2/TTF/Subset/SourceHanSansCN-VF.ttf.woff2). Copyright and full license texts accompany the files in public/fonts and the generated bundled license materials. No fonts are installed into Windows or downloaded at runtime.
+
+The workspace button bundles the unmodified Poppins SemiBold Latin WOFF2, font version 4.004, weight 600, from the official Google Fonts stylesheet https://fonts.googleapis.com/css2?family=Poppins:wght@600&display=swap and asset https://fonts.gstatic.com/s/poppins/v24/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2 . Copyright 2020 The Poppins Project Authors (https://github.com/itfoundry/Poppins), SIL Open Font License 1.1. The original license is included as public/fonts/Poppins-LICENSE.txt; the font is loaded locally without runtime network requests or Windows installation.
 
 更新使用固定 tauri-plugin-updater 2.14.1（MIT OR Apache-2.0）与 minisign-verify 0.3.0（MIT）；源码未修改，锁定依赖许可由构建脚本汇总。NSIS 模板新增更新模式有界等待已安装文件释放和独立修复目录入口，保留现有维护守卫。
 

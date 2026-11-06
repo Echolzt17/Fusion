@@ -72,13 +72,115 @@ async function fixture(page: Page) {
 }
 
 const calls = (page: Page, command: string) => page.evaluate(command => (window as any).apiFixture.calls.filter((value: any) => value.command === command), command);
-const claude = (page: Page) => page.getByRole('group', { name: '客户端工作区', exact: true }).getByRole('button', { name: 'Claude Code', exact: true }).click();
-const codex = (page: Page) => page.getByRole('group', { name: '客户端工作区', exact: true }).getByRole('button', { name: 'Codex', exact: true }).click();
+const workspacePicker = (page: Page) => page.getByRole('combobox', { name: '工作区', exact: true });
+async function workspace(page: Page, name: 'Codex' | 'Claude Code' | 'API') {
+  await workspacePicker(page).click();
+  await page.getByRole('listbox', { name: '工作区', exact: true }).getByRole('option', { name, exact: true }).click();
+  await expect(workspacePicker(page)).toHaveAttribute('aria-expanded', 'false');
+}
+async function api(page: Page, client: 'codex' | 'claudeCode' = 'claudeCode') {
+  await workspace(page, 'API');
+  await page.getByRole('combobox', { name: '目标客户端', exact: true }).selectOption(client);
+}
+const codex = (page: Page) => workspace(page, 'Codex');
+const official = (page: Page) => workspace(page, 'Claude Code');
 const sourceCard = (page: Page, name = 'Claude 测试来源') => page.getByRole('article', { name: '来源 ' + name, exact: true });
 
-test('client and source view changes preserve the subscription page and never switch a connection', async ({ page }) => {
+test('the unified workspace dropdown has three English choices and supports keyboard and outside dismissal', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await fixture(page);
-  await claude(page);
+  const picker = workspacePicker(page);
+  const list = page.getByRole('listbox', { name: '工作区', exact: true });
+  await expect(picker).toHaveText('Codex');
+  await expect(picker).toHaveCSS('font-weight', '600');
+  await expect(picker).toHaveCSS('font-family', /^Poppins,/);
+  await expect(picker).toHaveCSS('border-radius', '100px');
+  expect(await page.evaluate(async () => {
+    await document.fonts.ready;
+    return [...document.fonts].some(font => font.family === 'Poppins' && font.weight === '600' && font.status === 'loaded');
+  })).toBe(true);
+  await expect(picker.locator('.cw-switch-arrow g')).toHaveCount(3);
+  const restingWidth = await picker.evaluate(element => element.getBoundingClientRect().width);
+  await picker.hover();
+  await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', '25px');
+  expect(await picker.evaluate(element => element.getBoundingClientRect().width)).toBeCloseTo(restingWidth + 25, 0);
+  for (const [index, delay] of ['0.6s', '0.4s', '0.2s'].entries()) {
+    await expect(picker.locator('.cw-switch-arrow g').nth(index)).toHaveCSS('animation-name', 'cw-switch-color');
+    await expect(picker.locator('.cw-switch-arrow g').nth(index)).toHaveCSS('animation-delay', delay);
+  }
+  await expect(page.locator('.cw-client-picker, .cw-source-tabs')).toHaveCount(0);
+  await expect(page.locator('main > header')).not.toContainText('账号控制台');
+  await picker.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(list.getByRole('option')).toHaveCount(3);
+  for (const name of ['Codex', 'Claude Code', 'API']) {
+    await expect(list.getByRole('option', { name, exact: true })).toBeVisible();
+  }
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await expect(picker).toHaveText('API');
+  await expect(picker).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('combobox', { name: '目标客户端', exact: true })).toHaveValue('codex');
+
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(picker).toHaveText('Claude Code');
+  await expect(page.getByText('官方客户端自登录 · 未托管', { exact: true })).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Escape');
+  await expect(list).not.toBeVisible();
+  await expect(picker).toHaveText('Claude Code');
+  await expect(picker).toBeFocused();
+  await picker.click();
+  await page.keyboard.press('Tab');
+  await expect(list).not.toBeVisible();
+  await picker.click();
+  await page.getByRole('button', { name: '账号控制台', exact: true }).click();
+  await expect(list).not.toBeVisible();
+  for (const command of ['start_api_connection', 'stop_api_connection', 'start_pool', 'close_pool', 'open_claude_login']) {
+    expect(await calls(page, command)).toHaveLength(0);
+  }
+});
+
+test('the longest capsule expands without clipping its label or overflowing narrow light and dark windows', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await fixture(page);
+  await official(page);
+  await page.evaluate(() => document.fonts.ready);
+  const picker = workspacePicker(page);
+  for (const width of [1080, 320]) {
+    await page.setViewportSize({ width, height: 700 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await page.mouse.move(0, 0);
+      await page.getByRole('button', { name: '账号控制台', exact: true }).focus();
+      await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', '0px');
+      const restingWidth = await picker.evaluate(element => element.getBoundingClientRect().width);
+      await picker.hover();
+      const expansion = width === 320 ? 18 : 25;
+      await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', `${expansion}px`);
+      expect(await picker.evaluate(element => element.getBoundingClientRect().width)).toBeCloseTo(restingWidth + expansion, 0);
+      expect(await picker.evaluate(element => {
+        const label = element.querySelector('span')!;
+        const shapes = [element, ...element.querySelectorAll('.cw-switch-arrow path')];
+        return label.scrollWidth <= label.clientWidth + 1 && shapes.every(shape => {
+          const rect = shape.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= innerWidth;
+        });
+      })).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  }
+});
+
+test('workspace and API client view changes preserve the subscription page and never switch a connection', async ({ page }) => {
+  await fixture(page);
+  await api(page);
   await expect(sourceCard(page)).toBeVisible();
   await sourceCard(page).getByRole('button', { name: '选择此来源', exact: true }).click();
   await expect(sourceCard(page)).toContainText('候选已选中 · 尚未启动');
@@ -86,8 +188,7 @@ test('client and source view changes preserve the subscription page and never sw
   expect(await calls(page, 'stop_api_connection')).toHaveLength(0);
   await codex(page);
   await expect(page.getByRole('heading', { name: 'subscription@example.test', exact: true })).toBeVisible();
-  await claude(page);
-  await page.getByRole('button', { name: '官方登录', exact: true }).click();
+  await official(page);
   await expect(page.getByText('官方客户端自登录 · 未托管', { exact: true })).toBeVisible();
   expect(await calls(page, 'open_claude_login')).toHaveLength(0);
   await page.getByRole('button', { name: '打开 Claude Code 官方登录', exact: true }).click();
@@ -97,7 +198,7 @@ test('client and source view changes preserve the subscription page and never sw
 });
 
 test('API form masks the key, preserves an existing key on blank edit, and does not start on save', async ({ page }) => {
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   await page.getByRole('button', { name: '＋ 添加来源', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '添加 API 来源', exact: true });
   await drawer.getByLabel('来源名称', { exact: true }).fill('同事测试来源');
@@ -124,7 +225,7 @@ test('API form masks the key, preserves an existing key on blank edit, and does 
 });
 
 test('base checks and explicit billed tests remain separate from capability acceptance', async ({ page }) => {
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   const card = sourceCard(page);
   expect(await calls(page, 'check_api_source')).toHaveLength(0);
   await card.getByRole('button', { name: '基础检查', exact: true }).click();
@@ -140,7 +241,7 @@ test('base checks and explicit billed tests remain separate from capability acce
 });
 
 test('connection progress is local to the client and failure requires restoration before another start', async ({ page }) => {
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   await page.evaluate(() => { (window as any).apiFixture.holdStart = true; (window as any).apiFixture.failStart = true; });
   await sourceCard(page).getByRole('button', { name: '选择此来源', exact: true }).click();
   await page.getByRole('button', { name: '启动选中来源', exact: true }).click();
@@ -150,7 +251,7 @@ test('connection progress is local to the client and failure requires restoratio
   await expect(page.getByRole('heading', { name: 'subscription@example.test', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '添加账号', exact: true })).toBeEnabled();
   await page.evaluate(() => (window as any).apiFixture.releaseStart?.());
-  await claude(page);
+  await api(page);
   await expect(page.locator('.cw-danger')).toContainText('模拟配置冲突');
   await sourceCard(page).getByRole('button', { name: '选择此来源', exact: true }).click();
   await expect(page.getByRole('button', { name: '切换到选中来源', exact: true })).toBeDisabled();
@@ -161,7 +262,7 @@ test('connection progress is local to the client and failure requires restoratio
 });
 
 test('a selected source starts only on an explicit action and cannot be removed while in use', async ({ page }) => {
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   const card = sourceCard(page);
   await card.getByRole('button', { name: '选择此来源', exact: true }).click();
   await page.getByRole('button', { name: '启动选中来源', exact: true }).click();
@@ -170,14 +271,14 @@ test('a selected source starts only on an explicit action and cannot be removed 
   await expect(card.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
   await expect(card.getByRole('button', { name: '移除', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: '当前来源已运行', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '官方登录', exact: true }).click();
+  await official(page);
   expect(await calls(page, 'stop_api_connection')).toHaveLength(0);
-  await page.getByRole('button', { name: 'API 与中转来源', exact: true }).click();
+  await api(page);
   await expect(page.locator('.cw-running-title')).toContainText('API 运行中');
 });
 
 test('disabled sources do not start and a failed removal stays visible in its dialog', async ({ page }) => {
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   const card = sourceCard(page);
   await card.getByRole('button', { name: '禁用', exact: true }).click();
   await expect(card.getByRole('button', { name: '选择此来源', exact: true })).toBeDisabled();
@@ -195,7 +296,7 @@ test('disabled sources do not start and a failed removal stays visible in its di
 });
 
 test('API records stay client-scoped and missing usage stays unknown', async ({ page }) => {
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   await page.getByRole('button', { name: '请求日志', exact: true }).click();
   await expect(page.locator('.cw-log')).toHaveCount(1);
   await expect(page.locator('.cw-log')).toContainText('api-log-claudeCode');
@@ -207,8 +308,7 @@ test('API records stay client-scoped and missing usage stays unknown', async ({ 
   await expect(page.locator('.cw-log-top')).toContainText('→ 返回 fixture-returned-model');
   await expect(page.locator('.cw-log-usage')).toContainText('总 Token 未完整采集');
   await expect(page.locator('.cw-log')).toContainText('暂不显示 Token 合计');
-  await codex(page);
-  await page.getByRole('button', { name: 'API 与中转来源', exact: true }).click();
+  await page.getByRole('combobox', { name: '目标客户端', exact: true }).selectOption('codex');
   await expect(page.locator('.cw-log')).toContainText('api-log-codex');
   await expect(page.locator('.cw-log')).not.toContainText('api-log-claudeCode');
 });
@@ -216,12 +316,22 @@ test('API records stay client-scoped and missing usage stays unknown', async ({ 
 test('source drawer fits narrow light and dark workspaces and respects reduced motion', async ({ page }) => {
   await page.setViewportSize({ width: 540, height: 640 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await fixture(page); await claude(page);
+  await fixture(page); await api(page);
   const screenshots = mkdtempSync(join(tmpdir(), 'fusion-api-ui-'));
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await workspacePicker(page).hover();
+    await expect(workspacePicker(page)).toHaveCSS('animation-name', 'none');
+    await expect(workspacePicker(page).locator('.cw-switch-arrow-one')).toHaveCSS('animation-name', 'none');
     await page.screenshot({ path: join(screenshots, `workspace-${theme}.png`), fullPage: true });
+    await workspacePicker(page).click();
+    const menu = page.getByRole('listbox', { name: '工作区', exact: true });
+    await expect(menu).toBeInViewport();
+    await expect(page.locator('.record-select-popover')).toHaveCSS('animation-name', 'none');
+    await page.screenshot({ path: join(screenshots, `workspace-menu-${theme}.png`) });
+    await page.keyboard.press('Escape');
+    await expect(menu).not.toBeVisible();
     await page.getByRole('button', { name: '＋ 添加来源', exact: true }).click();
     const drawer = page.getByRole('dialog', { name: '添加 API 来源', exact: true });
     await expect(drawer.getByLabel('来源名称', { exact: true })).toBeFocused();

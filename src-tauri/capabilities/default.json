@@ -10,6 +10,7 @@
     "allow-network-remove",
     "allow-network-save-settings",
     "allow-network-select",
+    "allow-network-select-subscription",
     "allow-network-check",
     "allow-network-set-enabled",
     "allow-network-retry",

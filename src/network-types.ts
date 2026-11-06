@@ -32,6 +32,8 @@ export type NetworkStatus = {
   subscriptionName: string | null;
   subscriptionUpdatedAt: number | null;
   subscriptionKind: 'url' | 'file' | null;
+  selectedSubscriptionId: string | null;
+  subscriptions: SubscriptionView[];
   pendingUpdate: boolean;
   phase: string;
   error: string | null;
@@ -39,4 +41,12 @@ export type NetworkStatus = {
   activeRequests?: number;
   skippedNodes?: number;
   importWarnings?: string[];
+};
+
+export type SubscriptionView = {
+  id: string;
+  name: string;
+  kind: 'url' | 'file';
+  nodeCount: number;
+  updatedAt: number;
 };

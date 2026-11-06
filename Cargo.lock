@@ -2772,7 +2772,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "personal-codex-pool"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "pool-core"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "async-stream",
  "axum",

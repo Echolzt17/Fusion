@@ -94,12 +94,18 @@ SectionEnd
   await copyFile(process.env.ComSpec, waitTarget);
   const startFixture = () => spawn(waitTarget, ['/d','/c','set /p fusion_wait_fixture='], {env,cwd:waitInstall,windowsHide:true,stdio:['pipe','ignore','ignore']});
   fixture = startFixture(); await new Promise(r=>setTimeout(r,350));
-  const pendingWait = exec(waitOutput, ['/S','/UPDATE'], {env,windowsHide:true,timeout:20000});
+  // Production performs at most 100 polls. RmGetList is an OS call whose time
+  // is additional to the 100 ms sleeps; a 20 s test budget was too close on a
+  // loaded machine. Keep a finite budget and the exit/not-killed assertions.
+  const updateWaitTimeout = 60000;
+  const pendingWait = exec(waitOutput, ['/S','/UPDATE'], {env,windowsHide:true,timeout:updateWaitTimeout});
   await new Promise(r=>setTimeout(r,600)); assert.equal(fixture.exitCode,null);
   { const exited=once(fixture,'close');fixture.stdin.end('\n');await exited;fixture=null; }
   await pendingWait;passed++;
   fixture=startFixture();await new Promise(r=>setTimeout(r,350));
-  await assert.rejects(exec(waitOutput,['/S','/UPDATE'],{env,windowsHide:true,timeout:20000}),error=>error.code===2&&!error.killed);
+  const boundedWaitStarted = performance.now();
+  await assert.rejects(exec(waitOutput,['/S','/UPDATE'],{env,windowsHide:true,timeout:updateWaitTimeout}),error=>error.code===2&&!error.killed);
+  const boundedWaitElapsedMs = Math.round(performance.now() - boundedWaitStarted);
   assert.equal(fixture.exitCode,null,'bounded wait must never kill an active process');
   { const exited=once(fixture,'close');fixture.stdin.end('\n');await exited;fixture=null; }passed++;
   // Exercise the real no-database runtime helper from a Unicode/space path.
@@ -171,7 +177,7 @@ SectionEnd
   await exec(choiceOutput, ['/S'], {env,windowsHide:true,timeout:15000});
   passed += 5;
   assert.equal(await stat(join(env.LOCALAPPDATA,'PersonalCodexPool/pool.sqlite')).then(()=>true,()=>false), false, 'checker must not initialize a database');
-  console.log(JSON.stringify({ passed, productionGuard: true, installsPerformed: 0, realConfigUsed: false, runningFixtureTerminated: false, runtimeHelperChecked: true, runtimeReady }));
+  console.log(JSON.stringify({ passed, productionGuard: true, installsPerformed: 0, realConfigUsed: false, runningFixtureTerminated: false, boundedWaitElapsedMs, runtimeHelperChecked: true, runtimeReady }));
 } finally {
   if (fixture?.exitCode === null) { const exited=once(fixture,'close');fixture.stdin.end('\n');await exited; }
   // Only this exact mkdtemp child of the system temp directory may be removed.

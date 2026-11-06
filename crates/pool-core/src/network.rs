@@ -7,7 +7,7 @@ mod types;
 use crate::{storage::Store, upstream_http::UpstreamHttp, vault::Vault, Result};
 use futures_util::{stream, StreamExt};
 pub use parse::{infer_region, parse_subscription};
-use persistence::{Index, Persistence};
+use persistence::{Index, Persistence, SubscriptionRecord};
 use serde_json::json;
 use std::{
     collections::BTreeSet,
@@ -58,6 +58,7 @@ pub struct Network {
     state: Mutex<State>,
     routes: Arc<RwLock<()>>,
     lifecycle: tokio::sync::Mutex<()>,
+    runtime_generation: AtomicUsize,
     mutation: tokio::sync::Mutex<()>,
     checks: tokio::sync::Mutex<()>,
     active: AtomicUsize,
@@ -165,6 +166,7 @@ impl Network {
             }),
             routes: Arc::new(RwLock::new(())),
             lifecycle: tokio::sync::Mutex::new(()),
+            runtime_generation: AtomicUsize::new(0),
             mutation: tokio::sync::Mutex::new(()),
             checks: tokio::sync::Mutex::new(()),
             active: AtomicUsize::new(0),
@@ -191,6 +193,10 @@ impl Network {
             .unwrap_or(&[]);
         let at = crate::now();
         Ok(NetworkStatus {
+            selected_subscription_id: state.index.selected_subscription_id.clone(),
+            subscriptions: state.index.subscriptions.iter().map(|entry| SubscriptionView {
+                id: entry.id.clone(), name: entry.name.clone(), kind: entry.kind.clone(), node_count: entry.node_count, updated_at: entry.updated_at,
+            }).collect(),
             settings: settings.clone(), kernel_running: self.kernel.running(), current_node_id: state.index.current_node_id.clone(),
             nodes: nodes.iter().map(|node| {
                 let health = state.index.health.get(&node.id).cloned().unwrap_or_default();
@@ -303,12 +309,18 @@ impl Network {
         // Complete registration even if an individual request is cancelled
         // while the desktop backend is starting its child process.
         let network = self.clone();
-        tokio::spawn(async move { network.ensure_runtime_inner().await })
+        let generation = self.runtime_generation.load(Ordering::SeqCst);
+        tokio::spawn(async move { network.ensure_runtime_inner(generation).await })
             .await
             .map_err(|_| "专用内核启动任务异常")?
     }
-    async fn ensure_runtime_inner(self: &Arc<Self>) -> Result<Runtime> {
+    async fn ensure_runtime_inner(self: &Arc<Self>, generation: usize) -> Result<Runtime> {
         let _lifecycle = self.lifecycle.lock().await;
+        if generation != self.runtime_generation.load(Ordering::SeqCst)
+            || self.stopping.load(Ordering::SeqCst)
+        {
+            return Err("专用内核启动已失效，未发送请求".into());
+        }
         {
             let state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
             if let Some(runtime) = &state.runtime {
@@ -363,6 +375,15 @@ impl Network {
         let result = tokio::task::spawn_blocking(move || backend.start(&config))
             .await
             .map_err(|_| "专用内核启动任务失败")?;
+        if generation != self.runtime_generation.load(Ordering::SeqCst)
+            || self.stopping.load(Ordering::SeqCst)
+        {
+            let backend = self.kernel.clone();
+            tokio::task::spawn_blocking(move || backend.stop())
+                .await
+                .map_err(|_| "过期专用内核关闭失败")??;
+            return Err("专用内核启动已失效，未发送请求".into());
+        }
         let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
         match result {
             Ok(endpoint) => {
@@ -532,6 +553,7 @@ impl Network {
         self.status()
     }
     async fn stop_runtime(&self) -> Result<()> {
+        self.runtime_generation.fetch_add(1, Ordering::SeqCst);
         let _lifecycle = self.lifecycle.lock().await;
         let kernel = self.kernel.clone();
         tokio::task::spawn_blocking(move || kernel.stop())
@@ -586,11 +608,32 @@ impl Network {
             nodes: parsed.nodes,
             excluded: parsed.excluded,
         };
-        self.commit_snapshot(snapshot, url.as_deref()).await?;
+        let first = self
+            .state
+            .lock()
+            .map_err(|_| "专用网络状态不可用")?
+            .index
+            .subscriptions
+            .is_empty();
+        if first {
+            self.commit_snapshot(snapshot, url.as_deref(), true).await?;
+        } else {
+            let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            state.index = self
+                .persistence
+                .append(&state.index, &snapshot, url.as_deref())?;
+        }
         self.status()
     }
     pub async fn refresh_subscription(
         self: &Arc<Self>,
+        system_proxy: bool,
+    ) -> Result<NetworkStatus> {
+        self.refresh_subscription_by_id(None, system_proxy).await
+    }
+    pub async fn refresh_subscription_by_id(
+        self: &Arc<Self>,
+        id: Option<&str>,
         system_proxy: bool,
     ) -> Result<NetworkStatus> {
         let _mutation = self.mutation.lock().await;
@@ -598,20 +641,33 @@ impl Network {
             return Err("Fusion 正在退出".into());
         }
         let _flag = Flag::new(&self.refreshing).ok_or("订阅正在更新")?;
-        let (url, label) = {
+        let (url, label, target, selected) = {
             let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            let target = id
+                .map(str::to_owned)
+                .or_else(|| state.index.selected_subscription_id.clone())
+                .ok_or("请先选择代理订阅")?;
+            let selected = state.index.selected_subscription_id.as_deref() == Some(&target);
+            let mut index = state.index.clone();
+            index.select(&target)?;
             let url = self
                 .persistence
-                .url(&state.index)?
+                .url(&index)?
                 .ok_or("文件订阅需要重新导入 YAML")?;
-            state.last_refresh_attempt = crate::now();
+            if selected {
+                state.last_refresh_attempt = crate::now();
+            }
             (
                 url,
-                state
-                    .snapshot
-                    .as_ref()
-                    .map(|s| s.label.clone())
-                    .unwrap_or_else(|| "我的订阅".into()),
+                index
+                    .subscriptions
+                    .iter()
+                    .find(|entry| entry.id == target)
+                    .ok_or("代理订阅不存在")?
+                    .name
+                    .clone(),
+                target,
+                selected,
             )
         };
         let result = async {
@@ -625,7 +681,18 @@ impl Network {
                 nodes: parsed.nodes,
                 excluded: parsed.excluded,
             };
-            self.commit_snapshot(snapshot, Some(&url)).await
+            if selected {
+                self.commit_snapshot(snapshot, Some(&url), false).await
+            } else {
+                let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+                state.index = self.persistence.update_inactive(
+                    &state.index,
+                    &target,
+                    &snapshot,
+                    Some(&url),
+                )?;
+                Ok(())
+            }
         }
         .await;
         if let Err(error) = result {
@@ -689,6 +756,7 @@ impl Network {
         self: &Arc<Self>,
         snapshot: Snapshot,
         url: Option<&str>,
+        first: bool,
     ) -> Result<()> {
         {
             self.state
@@ -715,6 +783,13 @@ impl Network {
             {
                 let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
                 let mut index = state.index.clone();
+                if first {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    index
+                        .subscriptions
+                        .push(SubscriptionRecord::new(id.clone(), &snapshot));
+                    index.select(&id)?;
+                }
                 index
                     .settings
                     .node_order
@@ -797,23 +872,170 @@ impl Network {
         result
     }
     pub async fn remove_subscription(self: &Arc<Self>) -> Result<NetworkStatus> {
+        self.remove_subscription_by_id(None).await
+    }
+    pub async fn remove_subscription_by_id(
+        self: &Arc<Self>,
+        id: Option<&str>,
+    ) -> Result<NetworkStatus> {
         let _mutation = self.mutation.lock().await;
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err("Fusion 正在退出".into());
+        }
+        let (target, selected) = {
+            let state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            let target = id
+                .map(str::to_owned)
+                .or_else(|| state.index.selected_subscription_id.clone())
+                .ok_or("请先选择代理订阅")?;
+            if !state
+                .index
+                .subscriptions
+                .iter()
+                .any(|entry| entry.id == target)
+            {
+                return Err("代理订阅不存在".into());
+            }
+            let selected = state.index.selected_subscription_id.as_deref() == Some(&target);
+            (target, selected)
+        };
+        if !selected {
+            let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            let mut index = state.index.clone();
+            index.sync_selected();
+            index.subscriptions.retain(|entry| entry.id != target);
+            self.persistence.remove(&state.index, &index)?;
+            state.index = index;
+            drop(state);
+            return self.status();
+        }
         let _pause = self.pause_checks();
         let _barrier = self.routes.write().await;
+        let was_running = self.kernel.running();
         self.stop_runtime().await?;
-        {
+        let result = (|| {
             let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
-            let index = Index {
-                version: 1,
-                ..Index::default()
-            };
+            let mut index = state.index.clone();
+            index.subscriptions.retain(|entry| entry.id != target);
+            index.clear_selected();
             self.persistence.remove(&state.index, &index)?;
             state.index = index;
             state.snapshot = None;
             state.phase = "disabled".into();
             state.error = None;
             state.last_switch_reason = None;
+            state.probe_due.clear();
+            Ok(())
+        })();
+        if let Err(error) = result {
+            if was_running {
+                let _ = self.ensure_runtime().await;
+            }
+            return Err(error);
         }
+        self.status()
+    }
+
+    pub async fn select_subscription(self: &Arc<Self>, id: &str) -> Result<NetworkStatus> {
+        let _mutation = self.mutation.lock().await;
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err("Fusion 正在退出".into());
+        }
+        {
+            let state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            if state.index.selected_subscription_id.as_deref() == Some(id) {
+                drop(state);
+                return self.status();
+            }
+            if !state.index.subscriptions.iter().any(|entry| entry.id == id) {
+                return Err("代理订阅不存在".into());
+            }
+        }
+        let _pause = self.pause_checks();
+        {
+            self.state
+                .lock()
+                .map_err(|_| "专用网络状态不可用")?
+                .pending_update = true;
+        }
+        let _pending = Pending(self.clone());
+        let _barrier = self.routes.write().await;
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err("Fusion 正在退出".into());
+        }
+        let (old, old_snapshot, candidate, snapshot) = {
+            let state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            let mut old = state.index.clone();
+            old.sync_selected();
+            let mut candidate = old.clone();
+            candidate.select(id)?;
+            candidate.settings.enabled = old.settings.enabled;
+            let snapshot = self
+                .persistence
+                .load_snapshot(candidate.snapshot_file.as_deref())?
+                .ok_or("订阅节点不可用")?;
+            policy::validate_settings(&candidate.settings, &snapshot.nodes)?;
+            candidate.current_node_id = policy::select_node(
+                &snapshot.nodes,
+                &candidate.settings,
+                &candidate.health,
+                candidate.current_node_id.as_deref(),
+                crate::now(),
+            );
+            (old, state.snapshot.clone(), candidate, snapshot)
+        };
+        let was_running = self.kernel.running();
+        self.stop_runtime().await?;
+        {
+            let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            state.index = candidate;
+            state.snapshot = Some(snapshot);
+            state.restart_failed = false;
+            state.restart_used = false;
+        }
+        let result = async {
+            if old.settings.enabled {
+                self.ensure_runtime().await?;
+            }
+            let state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            self.persistence.save_index(&state.index)
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = self.stop_runtime().await;
+            {
+                let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+                state.index = old;
+                state.snapshot = old_snapshot;
+                state.restart_failed = false;
+                state.restart_used = false;
+                state.error = Some("订阅切换失败，已保留原订阅".into());
+            }
+            if was_running {
+                let _ = self.ensure_runtime().await;
+            }
+            return Err(error);
+        }
+        {
+            let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
+            state.phase = if state.index.settings.enabled {
+                "running"
+            } else {
+                "disabled"
+            }
+            .into();
+            state.error = None;
+            state.probe_due.clear();
+            state.last_refresh_attempt = state
+                .snapshot
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.updated_at);
+            state.last_switch_reason = Some("已选择订阅，仅后续请求使用此订阅".into());
+        }
+        self.probe_locks
+            .lock()
+            .map_err(|_| "节点检查状态不可用")?
+            .clear();
         self.status()
     }
     pub async fn check_nodes(self: &Arc<Self>, ids: Option<Vec<String>>) -> Result<NetworkStatus> {

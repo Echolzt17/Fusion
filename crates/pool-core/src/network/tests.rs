@@ -222,6 +222,7 @@ mod runtime {
         starts: AtomicUsize,
         reject_server: Mutex<Option<String>>,
         stall_probe: Arc<AtomicBool>,
+        stall_start: AtomicBool,
     }
     impl FakeKernel {
         fn new() -> Arc<Self> {
@@ -232,12 +233,16 @@ mod runtime {
                 starts: AtomicUsize::new(0),
                 reject_server: Mutex::new(None),
                 stall_probe: Arc::new(AtomicBool::new(false)),
+                stall_start: AtomicBool::new(false),
             })
         }
     }
     impl KernelBackend for FakeKernel {
         fn start(&self, config: &str) -> Result<KernelEndpoint> {
             self.starts.fetch_add(1, Ordering::SeqCst);
+            while self.stall_start.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
             if self.fail.load(Ordering::SeqCst) {
                 return Err("假内核拒绝启动".into());
             }
@@ -325,6 +330,397 @@ mod runtime {
         let mut settings = network.status().unwrap().settings;
         settings.allowed_regions = vec!["US".into(), "JP".into()];
         network.save_settings(settings).await.unwrap();
+    }
+    async fn add(network: &Arc<Network>, name: &str) -> String {
+        network
+            .import_subscription(SubscriptionInput {
+                url: None,
+                yaml: Some(String::from_utf8(fixture()).unwrap()),
+                name: Some(name.into()),
+            })
+            .await
+            .unwrap()
+            .subscriptions
+            .last()
+            .unwrap()
+            .id
+            .clone()
+    }
+    #[tokio::test]
+    async fn subscriptions_coexist_and_keep_independent_policy_health_across_restart() {
+        let temporary = tempfile::tempdir().unwrap();
+        let kernel = FakeKernel::new();
+        let network = network(&temporary, kernel.clone());
+        let a = add(&network, "订阅 A").await;
+        assert!(!network.status().unwrap().settings.enabled);
+        assert_eq!(
+            network.status().unwrap().settings.allowed_regions,
+            vec!["JP", "US"]
+        );
+        network.set_enabled(true).await.unwrap();
+        let before_starts = kernel.starts.load(Ordering::SeqCst);
+        let a_route = network.acquire().await.unwrap().unwrap();
+        a_route.lease.record_business(true, false);
+        drop(a_route);
+        let mut settings = network.status().unwrap().settings;
+        settings
+            .region_overrides
+            .insert(network.status().unwrap().nodes[0].id.clone(), "CA".into());
+        settings.allowed_regions = vec!["CA".into()];
+        network.save_settings(settings.clone()).await.unwrap();
+        let b = add(&network, "订阅 B").await;
+        assert_eq!(kernel.starts.load(Ordering::SeqCst), before_starts);
+        assert_eq!(
+            network
+                .status()
+                .unwrap()
+                .selected_subscription_id
+                .as_deref(),
+            Some(a.as_str())
+        );
+        network.select_subscription(&b).await.unwrap();
+        assert!(network
+            .status()
+            .unwrap()
+            .settings
+            .region_overrides
+            .is_empty());
+        assert!(network
+            .status()
+            .unwrap()
+            .nodes
+            .iter()
+            .all(|node| node.business_successes == 0));
+        let mut b_settings = network.status().unwrap().settings;
+        b_settings.allowed_regions = vec!["JP".into()];
+        network.save_settings(b_settings).await.unwrap();
+        network.select_subscription(&a).await.unwrap();
+        assert_eq!(
+            network.status().unwrap().settings.region_overrides,
+            settings.region_overrides
+        );
+        assert_eq!(
+            network
+                .status()
+                .unwrap()
+                .nodes
+                .iter()
+                .map(|node| node.business_successes)
+                .sum::<u64>(),
+            1
+        );
+        network.set_enabled(false).await.unwrap();
+        let restarted = Network::new(
+            network.persistence.store.clone(),
+            Arc::new(crate::vault::MemoryVault::default()),
+            temporary.path().join("network"),
+            FakeKernel::new(),
+        )
+        .unwrap();
+        assert_eq!(restarted.status().unwrap().subscriptions.len(), 2);
+        restarted.select_subscription(&b).await.unwrap();
+        assert_eq!(
+            restarted.status().unwrap().settings.allowed_regions,
+            vec!["JP"]
+        );
+        assert!(!restarted.status().unwrap().settings.enabled);
+    }
+    #[tokio::test]
+    async fn subscription_switch_drains_old_routes_and_cancels_old_checks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let kernel = FakeKernel::new();
+        let network = network(&temporary, kernel.clone());
+        let a = add(&network, "A").await;
+        let b = add(&network, "B").await;
+        network.set_enabled(true).await.unwrap();
+        let old_route = network.acquire().await.unwrap().unwrap();
+        kernel.stall_probe.store(true, Ordering::SeqCst);
+        let checking = network.clone();
+        let check = tokio::spawn(async move { checking.check_nodes(None).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let selecting = network.clone();
+        let mut switch = tokio::spawn(async move { selecting.select_subscription(&b).await });
+        assert!(tokio::time::timeout(Duration::from_millis(40), &mut switch)
+            .await
+            .is_err());
+        assert_eq!(
+            network
+                .status()
+                .unwrap()
+                .selected_subscription_id
+                .as_deref(),
+            Some(a.as_str())
+        );
+        assert!(kernel.running());
+        check.await.unwrap().unwrap();
+        old_route.lease.record_business(true, false);
+        drop(old_route);
+        switch.await.unwrap().unwrap();
+        assert!(network
+            .status()
+            .unwrap()
+            .nodes
+            .iter()
+            .all(|node| node.business_successes == 0));
+        kernel.stall_probe.store(false, Ordering::SeqCst);
+        network.set_enabled(false).await.unwrap();
+    }
+    #[tokio::test]
+    async fn removing_inactive_is_immediate_and_removing_selected_keeps_other_subscriptions_disabled(
+    ) {
+        let temporary = tempfile::tempdir().unwrap();
+        let kernel = FakeKernel::new();
+        let network = network(&temporary, kernel.clone());
+        let a = add(&network, "A").await;
+        let b = add(&network, "B").await;
+        let c = add(&network, "C").await;
+        network.set_enabled(true).await.unwrap();
+        let route = network.acquire().await.unwrap().unwrap();
+        let starts = kernel.starts.load(Ordering::SeqCst);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            network.remove_subscription_by_id(Some(&b)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(kernel.starts.load(Ordering::SeqCst), starts);
+        assert_eq!(
+            network
+                .status()
+                .unwrap()
+                .selected_subscription_id
+                .as_deref(),
+            Some(a.as_str())
+        );
+        let deleting = network.clone();
+        let mut deletion = tokio::spawn(async move { deleting.remove_subscription().await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), &mut deletion)
+                .await
+                .is_err()
+        );
+        drop(route);
+        deletion.await.unwrap().unwrap();
+        let status = network.status().unwrap();
+        assert!(status.selected_subscription_id.is_none());
+        assert!(!status.kernel_running && !status.settings.enabled);
+        assert_eq!(status.subscriptions.len(), 1);
+        assert_eq!(status.subscriptions[0].id, c);
+        assert!(status.nodes.is_empty());
+        assert_eq!(
+            std::fs::read_dir(temporary.path().join("network"))
+                .unwrap()
+                .count(),
+            1
+        );
+        let reloaded = network.persistence.load().unwrap().0;
+        assert_eq!(reloaded.subscriptions.len(), 1);
+        assert!(reloaded.selected_subscription_id.is_none());
+        add(&network, "D").await;
+        assert!(network.status().unwrap().selected_subscription_id.is_none());
+    }
+    #[tokio::test]
+    async fn inactive_refresh_keeps_selected_generation_and_each_url_separate() {
+        let temporary = tempfile::tempdir().unwrap();
+        let network = network(&temporary, FakeKernel::new());
+        let a = add(&network, "A").await;
+        let b = add(&network, "B").await;
+        assert!(network
+            .refresh_subscription_by_id(Some(&b), true)
+            .await
+            .unwrap_err()
+            .contains("文件订阅"));
+        {
+            let mut state = network.state.lock().unwrap();
+            let active_file = state.index.snapshot_file.clone();
+            let mut snapshot = state.snapshot.clone().unwrap();
+            snapshot.label = "B 更新".into();
+            snapshot.kind = "url".into();
+            snapshot.nodes.pop();
+            snapshot.updated_at += 1;
+            state.index = network
+                .persistence
+                .update_inactive(
+                    &state.index,
+                    &b,
+                    &snapshot,
+                    Some("https://example.invalid/sub?fake=1"),
+                )
+                .unwrap();
+            assert_eq!(state.index.snapshot_file, active_file);
+            assert_eq!(
+                state.index.selected_subscription_id.as_deref(),
+                Some(a.as_str())
+            );
+            let mut projected = state.index.clone();
+            projected.select(&b).unwrap();
+            assert_eq!(
+                network.persistence.url(&projected).unwrap().as_deref(),
+                Some("https://example.invalid/sub?fake=1")
+            );
+            assert!(network.persistence.url(&state.index).unwrap().is_none());
+            let updated_file = projected.snapshot_file.clone();
+            let raw = network
+                .persistence
+                .store
+                .get("network/v1/state")
+                .unwrap()
+                .unwrap();
+            assert!(!raw.contains("example.invalid"));
+            state.index = network
+                .persistence
+                .update_inactive(
+                    &state.index,
+                    &b,
+                    &snapshot,
+                    Some("https://example.invalid/sub?fake=2"),
+                )
+                .unwrap();
+            assert_ne!(
+                state
+                    .index
+                    .subscriptions
+                    .iter()
+                    .find(|entry| entry.id == b)
+                    .unwrap()
+                    .snapshot_file,
+                updated_file
+            );
+        }
+        network.select_subscription(&b).await.unwrap();
+        assert_eq!(network.status().unwrap().nodes.len(), 1);
+        network.remove_subscription_by_id(Some(&a)).await.unwrap();
+        assert_eq!(network.status().unwrap().subscriptions.len(), 1);
+        network.remove_subscription().await.unwrap();
+        assert_eq!(
+            std::fs::read_dir(temporary.path().join("network"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    #[tokio::test]
+    async fn legacy_single_subscription_upgrades_and_future_versions_are_rejected() {
+        let temporary = tempfile::tempdir().unwrap();
+        let network = network(&temporary, FakeKernel::new());
+        add(&network, "旧订阅").await;
+        let mut raw: serde_json::Value = serde_json::from_str(
+            &network
+                .persistence
+                .store
+                .get("network/v1/state")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        raw["version"] = 1.into();
+        raw.as_object_mut().unwrap().remove("subscriptions");
+        raw.as_object_mut()
+            .unwrap()
+            .remove("selectedSubscriptionId");
+        network
+            .persistence
+            .store
+            .set("network/v1/state", &raw.to_string())
+            .unwrap();
+        let (loaded, snapshot) = network.persistence.load().unwrap();
+        assert_eq!(loaded.subscriptions.len(), 1);
+        assert_eq!(snapshot.unwrap().label, "旧订阅");
+        network.persistence.save_index(&loaded).unwrap();
+        assert_eq!(network.persistence.load().unwrap().0.version, 2);
+        raw["version"] = 3.into();
+        network
+            .persistence
+            .store
+            .set("network/v1/state", &raw.to_string())
+            .unwrap();
+        assert!(network
+            .persistence
+            .load()
+            .err()
+            .unwrap()
+            .contains("较新版本"));
+        network.persistence.save_index(&loaded).unwrap();
+        let mut future = network.state.lock().unwrap().snapshot.clone().unwrap();
+        future.version = 2;
+        let mut updated = loaded.clone();
+        network
+            .persistence
+            .replace(&loaded, &mut updated, &future, None)
+            .unwrap();
+        assert!(network
+            .persistence
+            .load()
+            .err()
+            .unwrap()
+            .contains("较新版本"));
+    }
+    #[tokio::test]
+    async fn cancelled_queued_starts_cannot_restart_after_disable_shutdown_or_subscription_switch()
+    {
+        for action in ["disable", "shutdown", "switch"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let kernel = FakeKernel::new();
+            let network = network(&temporary, kernel.clone());
+            add(&network, "A").await;
+            let b = add(&network, "B").await;
+            let lifecycle = network.lifecycle.lock().await;
+            let generation = network.runtime_generation.load(Ordering::SeqCst);
+            let starting = network.clone();
+            let start = tokio::spawn(async move { starting.ensure_runtime().await });
+            tokio::task::yield_now().await;
+            tokio::task::yield_now().await;
+            start.abort();
+            let stopping = network.clone();
+            let stop = tokio::spawn(async move {
+                match action {
+                    "disable" => stopping.set_enabled(false).await.map(|_| ()),
+                    "switch" => stopping.select_subscription(&b).await.map(|_| ()),
+                    _ => stopping.shutdown().await,
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while generation == network.runtime_generation.load(Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            drop(lifecycle);
+            stop.await.unwrap().unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(!kernel.running());
+            assert_eq!(kernel.starts.load(Ordering::SeqCst), 1);
+        }
+    }
+    #[tokio::test]
+    async fn a_start_already_in_the_backend_is_retired_before_disable_completes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let kernel = FakeKernel::new();
+        let network = network(&temporary, kernel.clone());
+        add(&network, "A").await;
+        kernel.stall_start.store(true, Ordering::SeqCst);
+        let starts = kernel.starts.load(Ordering::SeqCst);
+        let starting = network.clone();
+        let start = tokio::spawn(async move { starting.ensure_runtime().await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while kernel.starts.load(Ordering::SeqCst) == starts {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        start.abort();
+        let stopping = network.clone();
+        let mut stop = tokio::spawn(async move { stopping.set_enabled(false).await });
+        assert!(tokio::time::timeout(Duration::from_millis(30), &mut stop)
+            .await
+            .is_err());
+        kernel.stall_start.store(false, Ordering::SeqCst);
+        stop.await.unwrap().unwrap();
+        assert!(!kernel.running());
+        assert!(network.state.lock().unwrap().runtime.is_none());
     }
     #[tokio::test]
     async fn persistence_encrypts_snapshot_and_never_exports_credentials() {
@@ -437,14 +833,17 @@ mod runtime {
         let yaml = String::from_utf8(fixture())
             .unwrap()
             .replace("example.invalid", "bad.invalid");
-        assert!(network
+        let added = network
             .import_subscription(SubscriptionInput {
                 url: None,
                 yaml: Some(yaml),
-                name: Some("不兼容的假候选".into())
+                name: Some("不兼容的假候选".into()),
             })
             .await
-            .is_err());
+            .unwrap();
+        assert_eq!(added.subscriptions.len(), 2);
+        let candidate = added.subscriptions.last().unwrap().id.clone();
+        assert!(network.select_subscription(&candidate).await.is_err());
         let status = network.status().unwrap();
         assert_eq!(
             status

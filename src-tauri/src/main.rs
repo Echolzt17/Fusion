@@ -745,6 +745,7 @@ fn main() {
             network_commands::network_remove,
             network_commands::network_save_settings,
             network_commands::network_select,
+            network_commands::network_select_subscription,
             network_commands::network_check,
             network_commands::network_set_enabled,
             network_commands::network_retry,

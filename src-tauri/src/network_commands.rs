@@ -11,14 +11,19 @@ pub async fn network_import(a: tauri::State<'_, App>, input: SubscriptionInput) 
     a.network.import_subscription(input).await
 }
 #[tauri::command]
-pub async fn network_refresh(a: tauri::State<'_, App>, system_proxy: bool) -> Result<NetworkStatus> {
+pub async fn network_refresh(a: tauri::State<'_, App>, system_proxy: bool, id: Option<String>) -> Result<NetworkStatus> {
     let _work = a.updates.enter_work()?;
-    a.network.refresh_subscription(system_proxy).await
+    a.network.refresh_subscription_by_id(id.as_deref(), system_proxy).await
 }
 #[tauri::command]
-pub async fn network_remove(a: tauri::State<'_, App>) -> Result<NetworkStatus> {
+pub async fn network_remove(a: tauri::State<'_, App>, id: Option<String>) -> Result<NetworkStatus> {
     let _work = a.updates.enter_work()?;
-    a.network.remove_subscription().await
+    a.network.remove_subscription_by_id(id.as_deref()).await
+}
+#[tauri::command]
+pub async fn network_select_subscription(a: tauri::State<'_, App>, id: String) -> Result<NetworkStatus> {
+    let _work = a.updates.enter_work()?;
+    a.network.select_subscription(&id).await
 }
 #[tauri::command]
 pub async fn network_save_settings(a: tauri::State<'_, App>, settings: NetworkSettings) -> Result<NetworkStatus> {

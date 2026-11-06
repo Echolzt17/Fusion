@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Modal } from './Modal';
-import type { ApiProtocol, ApiRequestLog, ApiSource, CheckResult, ClientId, ClientStatus, SourceInput, SourceMode, WorkspacePage } from './api-types';
+import { RecordSelector } from './RecordSelector';
+import type { ApiProtocol, ApiRequestLog, ApiSource, CheckResult, ClientId, ClientStatus, SourceInput, WorkspacePage } from './api-types';
 import './client-workspace.css';
 
-export type { ClientId, ClientStatus, SourceMode } from './api-types';
+export type { ClientId, ClientStatus } from './api-types';
+export type WorkspaceView = ClientId | 'api';
 
 const clients: Record<ClientId, string> = { codex: 'Codex', claudeCode: 'Claude Code' };
 const protocols: Record<ApiProtocol, string> = { responses: 'OpenAI Responses', messages: 'Anthropic Messages', chatCompletions: 'OpenAI Chat Completions' };
@@ -26,19 +28,22 @@ const errorText = (error: unknown, secret?: string) => {
 };
 const time = (value: number | undefined | null) => finite(value) && value > 0 ? new Date(value < 1e12 ? value * 1000 : value).toLocaleString('zh-CN', { hour12: false }) : '时间未记录';
 
-export function ClientSwitcher({ value, onChange }: { value: ClientId; onChange: (value: ClientId) => void }) {
-  return <div className="cw-client-picker" role="group" aria-label="客户端工作区">
-    {(Object.keys(clients) as ClientId[]).map(client => <button key={client} type="button" aria-pressed={value === client} onClick={() => onChange(client)}>
-      <span className={'cw-client-mark cw-mark-' + client} aria-hidden="true">{client === 'codex' ? 'C' : '✳'}</span>{clients[client]}
-    </button>)}
-    <span className="cw-view-note">切换视图不会改变运行接入</span>
-  </div>;
-}
-
-export function SourceModeSwitcher({ client, value, onChange }: { client: ClientId; value: SourceMode; onChange: (value: SourceMode) => void }) {
-  return <div className="cw-source-tabs" role="group" aria-label={`${clients[client]} 来源视图`}>
-    <button type="button" aria-pressed={value === 'subscription'} onClick={() => onChange('subscription')}>{client === 'codex' ? '订阅账号池' : '官方登录'}</button>
-    <button type="button" aria-pressed={value === 'api'} onClick={() => onChange('api')}>API 与中转来源</button>
+export function WorkspaceSwitcher({ value, onChange }: { value: WorkspaceView; onChange: (value: WorkspaceView) => void }) {
+  // Li-Deheng/shy-moth-10 (MIT): three overlapping chevrons spread on hover.
+  // Source and full license: THIRD_PARTY_NOTICES.md.
+  const arrowPath = 'M0.154393339,3.89485454 L3.97631488,0.139296592 C4.17083111,-0.0518420739 4.48263286,-0.0518571125 4.67716753,0.139262789 L25.6916134,20.7848311 C26.0855801,21.1718824 26.0911863,21.8050225 25.704135,22.1989893 C25.7000188,22.2031791 25.6958657,22.2073326 25.6916762,22.2114492 L4.67709797,42.8607841 C4.48259567,43.0519059 4.17082418,43.0519358 3.97628526,42.8608513 L0.154518591,39.1069479 C-0.0424848215,38.9134427 -0.0453206733,38.5968729 0.148184538,38.3998695 C0.150289256,38.3977268 0.152413239,38.395603 0.154556228,38.3934985 L16.9937789,21.8567812 C17.1908028,21.6632968 17.193672,21.3467273 17.0001876,21.1497035 C16.9980647,21.1475418 16.9959223,21.1453995 16.9937605,21.1432767 L0.15452076,4.60825197 C-0.0425130651,4.41477773 -0.0453986756,4.09820839 0.148075568,3.90117456 C0.150162624,3.89904911 0.152268631,3.89694235 0.154393339,3.89485454 Z';
+  return <div className="cw-workspace-picker">
+    <RecordSelector label="工作区" value={value} options={[
+      { value: 'codex', label: 'Codex' },
+      { value: 'claudeCode', label: 'Claude Code' },
+      { value: 'api', label: 'API' },
+    ]} onChange={next => onChange(next as WorkspaceView)} closeOnSelect align="start" triggerIcon={<span className="cw-switch-arrow" aria-hidden="true">
+      <svg width="66" height="43" viewBox="0 0 66 43" focusable="false">
+        <g className="cw-switch-arrow-one"><path d={arrowPath} transform="translate(40 0)" /></g>
+        <g className="cw-switch-arrow-two"><path d={arrowPath} transform="translate(20 0)" /></g>
+        <g className="cw-switch-arrow-three"><path d={arrowPath} /></g>
+      </svg>
+    </span>} />
   </div>;
 }
 
@@ -106,6 +111,7 @@ function SourceEditor({ source, client, onClose, onSave }: EditorProps) {
 
 export type ApiWorkspaceProps = {
   client: ClientId;
+  onClientChange: (value: ClientId) => void;
   page: WorkspacePage;
   poolMode?: boolean;
   poolBusy?: boolean;
@@ -113,7 +119,7 @@ export type ApiWorkspaceProps = {
   onStatusChange?: (statuses: ClientStatus[]) => void;
 };
 
-export function ApiWorkspace({ client, page, poolMode = false, poolBusy = false, onSwitchToPool, onStatusChange }: ApiWorkspaceProps) {
+export function ApiWorkspace({ client, onClientChange, page, poolMode = false, poolBusy = false, onSwitchToPool, onStatusChange }: ApiWorkspaceProps) {
   const [sources, setSources] = useState<ApiSource[]>([]);
   const [statuses, setStatuses] = useState<ClientStatus[]>([]);
   const [logs, setLogs] = useState<Partial<Record<ClientId, ApiRequestLog[]>>>({});
@@ -209,6 +215,9 @@ export function ApiWorkspace({ client, page, poolMode = false, poolBusy = false,
   const startLabel = lifecycleBusy ? '正在处理连接…' : poolMode && client === 'codex' ? '从账号池切换到此来源' : selectedIsCurrent ? '当前来源已运行' : candidate?.id === status?.sourceId && status?.mode === 'running' ? '重新应用选中来源' : connected ? '切换到选中来源' : '启动选中来源';
 
   return <div className="cw-workspace" data-client={client}>
+    <div className="cw-api-toolbar"><label>目标客户端<select aria-label="目标客户端" value={client} onChange={event => onClientChange(event.target.value as ClientId)}>
+      {(Object.keys(clients) as ClientId[]).map(value => <option key={value} value={value}>{clients[value]}</option>)}
+    </select></label></div>
     <div className="cw-running-panel">
       <div className="cw-running-copy"><span className="cw-eyebrow">{clients[client].toUpperCase()} / API</span>
         <div className="cw-running-title"><span className={'cw-status-dot ' + (transition || lifecycleIntent[client] ? 'is-busy' : status?.mode === 'running' ? 'is-running' : '')} /><h2>{readErrors.status ? '运行状态读取失败' : lifecycleIntent[client] ? lifecycleIntent[client] === 'start' ? '正在启动 API' : '正在关闭 API' : status ? states[status.mode] : '正在读取运行状态'}</h2></div>
