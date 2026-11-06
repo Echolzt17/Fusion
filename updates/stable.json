@@ -1,11 +1,11 @@
 {
-  "version": "1.0.10",
-  "notes": "# Fusion 1.0.10\r\n\r\n## 本次重点\r\n\r\n- 设置页新增 AI 订阅价格对比，每日首次打开时更新，默认 Codex / ChatGPT，可切换软件、套餐和查看地区价格；另有 PriceAI 充值渠道入口。\r\n- 移除首页常驻说明和设置页重复的 Codex 接入卡，账号池统一在首页启动和关闭。\r\n- GitHub 更新遇到临时连接、读取或部分服务错误时有限自动重试，保留取消、签名和安装前检查。\r\n- 增加 Codex / Claude Code 独立工作区及手动 API 来源，密钥由 Windows 凭据管理器保存；仅明确启用才改变接入。\r\n- 设置页增加账号池专用代理与节点管理，使用固定版本内核，仅影响原 Codex 订阅池，不更改系统代理、DNS 或 TUN。\r\n- 增加可读聊天交接，准备、创建、发送及打开分别操作，不搬运旧账号密文；挂件增加状态握手、去重和失联恢复。\r\n\r\n## 升级与验证范围\r\n\r\n本版按维护者明确要求发布。自动化检查与真实账号、Win10/Win11、在线升级和持续交互验收分别记录；未完成项目仍待验收，不承诺所有网络或挂件问题已解决。\r\n\r\n账号池关闭且接入已脱离时，更新不关闭或重启 Codex；使用中先完成正常关闭，更新后账号池保持关闭，仅点击“启动账号池”时打开。已发送、已输出、工具调用或执行状态不明的业务请求仍不自动重放。\r\n",
-  "pub_date": "2026-11-06T10:20:07.564Z",
+  "version": "1.0.11",
+  "notes": "# Fusion 1.0.11\r\n\r\n## 本次重点\r\n\r\n- 左上统一为 Codex / Claude Code / API 胶囊入口，采用 Poppins 字体、三箭头悬停动画，点击展开带发光滑块的工作区选择面板。\r\n- 代理与节点改成账单式单卡，常用操作集中，地区、备用顺序、固定及排除等高级设置按需展开。\r\n- 可保存多个独立代理订阅，分别更新和移除，每次明确选用一个；添加不会覆盖或切走当前订阅，不跨订阅自动备用。\r\n- 切换订阅先等待在途请求完成，失败保留原订阅；修复失效内核启动任务在停止或订阅切换后继续启动的问题。\r\n- 开发源码、构建配置、字体与许可同步到 GitHub，供其他 Windows 电脑继续开发；账号、运行数据和发布签名材料仍在各电脑独立保管。\r\n\r\n## 升级与验证范围\r\n\r\n本版按维护者明确要求发布。自动化检查与真实账号、代理订阅、Win10/Win11、安装/在线升级及持续交互验收分别记录；未完成项目仍待验收。API 来源切换请使用新聊天，既有文字历史的来源绑定和部分用量归因仍有待继续验证与改进。\r\n\r\n原单订阅会保留并进入新版多订阅目录。新版写入目录版本 2 后，旧版会按向前保护拒绝读取，不能把降级重装当作读取新版目录的方式；没有新增 SQLite schema 迁移。\r\n\r\n更新前请正常关闭账号池并退出 Fusion；通过应用内更新时由原生命周期流程完成安全收尾。已脱离账号池时更新不关闭或重启 Codex，更新后账号池保持关闭，仅点击“启动账号池”时打开。执行状态不明、已输出或已返回工具调用的业务请求仍不自动重放。\r\n",
+  "pub_date": "2026-11-06T17:51:36.446Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.10/Fusion_1.0.10_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVYvMHpQK2ZDUWplc29oZHZjNytqVjRqT28xNnozWEpQejc3cTZ4WWNJU3JZSEk2Q3Z1YUpPVEliR0p0TjJwTHd1bjZEcVp2dWRLd0VXQ0FhWTBsT1FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTYwMzQ4CWZpbGU6RnVzaW9uXzEuMC4xMF94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjEwClZtRG4xUzRKYUVvbG5pdHo0MjhmbHlBSVVyTDlGMWN0UzhzZC9pb04wS3RSQWdMekFCSy9kcDVrdUhYallER2Z3QnZTcWZ6VTk1UkpmYWx2cEhoN0JRPT0K"
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.11/Fusion_1.0.11_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVdaNUxBcHdpdlZJYnNWTTF4UWU3NE5wVFJCK000Y2F2bVBHT3AvbVVsazhBcWFhNjJLeGJ2Wkx5NFY1cklkUDFtQTIzcFpEbzFOVnVHcEtoM0xEZWd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTg3NDQ4CWZpbGU6RnVzaW9uXzEuMC4xMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjExCm5OcmMyMldiekRjSUhPeGZvamliU3hZeTJ4YkdiOTJPSkUra1R6M0x5eVFoT1BPdHpod1lseCtsVDYyYWlsc1RUNDJvRmFJZE5vc09WM2pNNzdRdEJRPT0K"
     }
   }
 }
