@@ -6,9 +6,9 @@
 
 本机账号池 · 会话固定账号 · 额度与用量可见 · 一键启停
 
-**Windows 10 / 11 · x64 · v1.0.7 独立更新 · 账号池手动开启**
+**Windows 10 / 11 · x64 · v1.0.8 当前账号立体显示 · 账号池手动开启**
 
-[下载 v1.0.7 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.7/Fusion_1.0.7_x64-setup.exe) · [查看更新记录](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.7) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.8 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.8/Fusion_1.0.8_x64-setup.exe) · [查看更新记录](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.8) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
@@ -24,7 +24,7 @@ Fusion 是面向 Windows 本机 Codex 桌面客户端的账号池工具，适合
 
 | 使用场景 | Fusion 提供的能力 |
 | --- | --- |
-| 有多个账号，切换麻烦 | 浏览器授权添加账号，统一查看套餐、额度和状态；支持暂停、恢复和重新授权 |
+| 有多个账号，切换麻烦 | 浏览器授权添加账号，统一查看套餐、额度和状态；当前首选卡片持续立体突出，支持暂停、恢复和重新授权 |
 | 希望按实际需求选号 | 自动、高订阅优先、低订阅优先、高额度优先、低额度优先，共五种策略 |
 | 多个任务同时进行 | 每账号默认 4 个并发名额；全部繁忙时排队，未绑定的新请求可选择可用备用账号 |
 | 需要多轮对话和工具调用 | 会话、响应引用和加密上下文保持原账号，避免续接时混用身份 |
