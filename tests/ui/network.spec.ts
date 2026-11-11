@@ -13,7 +13,7 @@ async function fixture(page: Page, options: { empty?: boolean; many?: boolean; e
     const state = {
       status: { settings, kernelRunning: options.enabled ?? false, currentNodeId: options.enabled ? 'jp-primary' : null, nodes, subscriptionName: options.empty ? null : '公开测试订阅', subscriptionUpdatedAt: options.empty ? null : now, subscriptionKind: options.empty ? null : 'url', selectedSubscriptionId: options.empty ? null as string | null : 'initial', subscriptions: [] as any[], pendingUpdate: false, phase: options.enabled ? 'running' : 'idle', error: null, lastSwitchReason: null },
       entries, nextId: 0,
-      calls: [] as { command: string; args: Record<string, any> }[], callbacks: {} as Record<number, (event: unknown) => void>, statusError: false, importError: false,
+      calls: [] as { command: string; args: Record<string, any> }[], callbacks: {} as Record<number, (event: unknown) => void>, statusError: false, importError: false, holdImport:false, releaseImport:null as (()=>void)|null,
     };
     const sync = () => {
       state.status.subscriptions = Object.values(entries).map(entry => ({ id: entry.id, name: entry.name, kind: entry.kind, updatedAt: entry.updatedAt, nodeCount: entry.nodes.length }));
@@ -60,6 +60,7 @@ async function fixture(page: Page, options: { empty?: boolean; many?: boolean; e
           case 'ai_pricing': return { products: [], error: null, updatedAt: null };
           case 'network_status': if (state.statusError) throw new Error('公开测试状态读取失败'); return structuredClone(state.status);
           case 'network_import': {
+            if(state.holdImport) await new Promise<void>(resolve=>state.releaseImport=resolve);
             if (state.importError) throw new Error('公开测试订阅导入失败 ' + (args.input.url || ''));
             const id = 'imported-' + (++state.nextId);
             entries[id] = { id, name: args.input.name || '已导入订阅', kind: args.input.url ? 'url' : 'file', updatedAt: now, nodes: [node(id + '-node', '日本 导入节点', 'JP')], settings: { ...structuredClone(settings), enabled: false, allowedRegions: ['JP'] }, currentNodeId: null };
@@ -298,4 +299,26 @@ test('a thousand nodes stay contained in light and dark narrow settings and remo
   expect(await calls(page, 'network_remove')).toHaveLength(1);
   await expect(group(page)).toContainText('尚未导入订阅');
   console.log('Network card UI screenshots:', screenshots);
+});
+
+test('node delay testing is visible before enabling the dedicated proxy', async ({ page }) => {
+  await fixture(page);await page.getByRole('button',{name:'连接与设置',exact:true}).click();
+  const all=group(page).getByRole('button',{name:'测试全部延迟',exact:true});
+  await expect(all).toBeEnabled();await all.click();
+  expect(await calls(page,'network_check')).toHaveLength(1);
+  expect(await calls(page,'network_set_enabled')).toHaveLength(0);
+});
+
+test('slow subscription import shows progress and can continue outside the dialog', async ({ page }) => {
+  await fixture(page);await page.getByRole('button',{name:'连接与设置',exact:true}).click();
+  await page.evaluate(()=>(window as any).networkFixture.holdImport=true);
+  await group(page).getByRole('button',{name:'添加订阅',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'导入代理订阅'});
+  await dialog.getByLabel('HTTPS 订阅链接',{exact:true}).fill('https://example.test/public-fixture');
+  await dialog.getByRole('button',{name:'导入链接',exact:true}).click();
+  await expect(dialog.getByRole('status')).toContainText('正在下载、解析并核验订阅');
+  await dialog.getByRole('button',{name:'在后台继续',exact:true}).click();await expect(dialog).not.toBeVisible();
+  await page.getByRole('button',{name:'账号控制台',exact:true}).click();
+  await page.evaluate(()=>(window as any).networkFixture.releaseImport());
+  expect(await calls(page,'network_import')).toHaveLength(1);
 });

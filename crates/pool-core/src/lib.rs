@@ -1,4 +1,5 @@
 pub mod account;
+pub mod claude_pool;
 pub mod api_sources;
 pub mod api_gateway;
 pub mod api_config;

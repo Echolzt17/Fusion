@@ -18,7 +18,7 @@ function path(points: { x: number; y: number | null }[]) {
   return points.map(p => { if (p.y === null) { connected = false; return ''; } const command = connected ? 'L' : 'M'; connected = true; return `${command}${p.x},${p.y}`; }).join(' ');
 }
 
-export function UsageDashboard({ data, onDetails }: { data: DashboardUsage | null; onDetails: () => void }) {
+export function UsageDashboard({ data, onDetails, label = "本机 Codex 用量", caption = "本机总用量" }: { data: DashboardUsage | null; onDetails: () => void; label?: string; caption?: string }) {
   const panel = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(720);
   useEffect(() => {
@@ -44,8 +44,8 @@ export function UsageDashboard({ data, onDetails }: { data: DashboardUsage | nul
   const hourDescription = (h: DashboardUsage['hours'][number]) => `${hourLabel(h.hour)}—${hourLabel(h.hour + 1)}：${h.minutes === null ? '尚无数据' : minutesLabel(h.minutes)}${h.provisional ? '（暂计）' : ''}`;
   const dayDescription = days.map(d => `${d.date}：${d.totalTokens === null ? '暂无明细' : d.totalTokens.toLocaleString('zh-CN') + ' Token'}`).join('；');
   const chartHint = `近 7 天${mode === 'bar' ? '柱状图' : '折线图'}，点击切换为${mode === 'bar' ? '折线图' : '柱状图'}`;
-  return <section ref={panel} className="usage-panel usage-dashboard" aria-label="本机 Codex 用量">
-    <div className="analytics-total"><span className="analytics-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4" /></svg></span><h2>Token 用量</h2><span className="badge neutral" title="账号池累计与本机非池用量合计">{measured ? '累计 ' + compact(tokens!.totalTokens) : data?.scanning || !data ? '读取中' : '暂无用量'}</span></div>
+  return <section ref={panel} className="usage-panel usage-dashboard" aria-label={label}>
+    <div className="analytics-total"><span className="analytics-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4" /></svg></span><h2>Token 用量</h2><span className="badge neutral" title={caption}>{measured ? '累计 ' + compact(tokens!.totalTokens) : data?.scanning || !data ? '读取中' : '暂无用量'}</span></div>
     <div className="token-metrics"><div><small>输入 Token</small><strong>{measured ? compact(tokens!.inputTokens) : '—'}</strong></div><div><small>输出 Token</small><strong>{measured ? compact(tokens!.outputTokens) : '—'}</strong></div></div>
     <div className="usage-chart-heading"><h3>今日使用时段</h3><span title="任务运行时长含思考和工具执行，并发重叠只算一次；未结束任务计至最后可确认的活动记录。">{hasHours ? `已记录 ${minutesLabel(hoursTotal)}${data?.activityPartial ? ' · 暂计' : ''}` : !data || data.scanning ? '正在读取' : '暂无时长记录'}</span></div>
     <div className="usage-hours">
@@ -69,6 +69,6 @@ export function UsageDashboard({ data, onDetails }: { data: DashboardUsage | nul
     </button>
     <span id="usage-trend-values" className="usage-sr-only">{dayDescription || '暂无明细'}</span>
     <div className="usage-details"><span><small>已知缓存输入</small><b>{tokens?.cachedTokens == null ? '—' : compact(tokens.cachedTokens)}</b></span><span><small>已知推理输出</small><b>{tokens?.reasoningTokens == null ? '—' : compact(tokens.reasoningTokens)}</b></span></div>
-    <div className="analytics-footer"><span title={data?.updatedAt ? `最后读取 ${new Date(data.updatedAt).toLocaleString('zh-CN', { hour12: false })}。缓存包含在输入中，推理包含在输出中。` : undefined}>本机总用量 · {data?.timezone || '本地时间'}{data?.scanning && ' · 补读中'}{data?.historyPartial && <small className="usage-coverage" title="统计本机仍可读取的记录；部分旧记录缺失或无法还原日期，累计与近 7 天明细的覆盖范围可能不同。">部分历史缺少明细</small>}{data?.error && <small className="usage-coverage" role="status">{data.error}</small>}</span><ActionButton kind="next" onClick={onDetails}>账号池明细</ActionButton></div>
+    <div className="analytics-footer"><span title={data?.updatedAt ? `最后读取 ${new Date(data.updatedAt).toLocaleString('zh-CN', { hour12: false })}。缓存包含在输入中，推理包含在输出中。` : undefined}>{caption} · {data?.timezone || '本地时间'}{data?.scanning && ' · 补读中'}{data?.historyPartial && <small className="usage-coverage" title="统计本机仍可读取的记录；部分旧记录缺失或无法还原日期，累计与近 7 天明细的覆盖范围可能不同。">部分历史缺少明细</small>}{data?.error && <small className="usage-coverage" role="status">{data.error}</small>}</span><ActionButton kind="next" onClick={onDetails}>账号池明细</ActionButton></div>
   </section>;
 }

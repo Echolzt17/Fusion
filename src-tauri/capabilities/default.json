@@ -4,6 +4,12 @@
     "main"
   ],
   "permissions": [
+    "allow-claude-pool-status",
+    "allow-claude-pool-login",
+    "allow-claude-pool-cancel-login",
+    "allow-claude-pool-start",
+    "allow-claude-pool-stop",
+    "allow-claude-pool-account",
     "allow-network-status",
     "allow-network-import",
     "allow-network-refresh",
@@ -11,7 +17,7 @@
     "allow-network-save-settings",
     "allow-network-select",
     "allow-network-select-subscription",
-    "allow-network-check",
+    "allow-network-check", "allow-network-cancel-check",
     "allow-network-set-enabled",
     "allow-network-retry",
     "allow-ai-pricing",

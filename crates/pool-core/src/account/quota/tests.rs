@@ -8,6 +8,19 @@ use axum::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[tokio::test]
+async fn free_plan_is_retained_from_own_authorization_even_when_quota_is_missing() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine};
+    let (_temporary,accounts)=fixture();
+    let account_id="free-public-fixture";
+    let jwt=format!("fixture.{}.fixture",URL_SAFE_NO_PAD.encode(json!({"email":"free@example.test","https://api.openai.com/auth":{"chatgpt_account_id":account_id,"chatgpt_plan_type":"free"}}).to_string()));
+    let tokens=Tokens {access_token:"public-fixture-access".into(),refresh_token:"public-fixture-refresh".into(),id_token:jwt,expires_at:now()+3600};
+    let account=accounts.accept_login(tokens,None).await.unwrap();
+    assert!(account.quota.is_none());
+    let plan=accounts.store.get(&format!("account-plan/v1/{}",account.id)).unwrap().unwrap();
+    assert_eq!(crate::subscription::label_code(&plan),"Free");
+}
+
 #[test]
 fn ten_minute_due_boundary_and_clock_rollback() {
     assert!(!due(Some(1000), 1599));

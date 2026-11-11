@@ -98,8 +98,9 @@ struct Context {
     snapshot: Snapshot,
     client: ClientKind,
     key: String,
-    runtime: Mutex<Runtime>,
-    changed: Notify,
+    runtime: Arc<Mutex<Runtime>>,
+    changed: Arc<Notify>,
+    pool: Option<Arc<crate::claude_pool::Pool>>,
     slots: Arc<Semaphore>,
     cancel: CancellationToken,
 }
@@ -117,6 +118,13 @@ impl ApiGateway {
         ) {
             return Err("此来源协议与客户端不兼容；首版仅支持 Codex/Responses 和 Claude Code/Messages 原生接入".into());
         }
+        Self::start_snapshot(sources, client, snapshot, None).await
+    }
+    pub async fn start_claude_pool(sources: Arc<Sources>, pool: Arc<crate::claude_pool::Pool>) -> Result<Arc<Self>> {
+        if !pool.ready()? { return Err("请先添加可用的 Claude 订阅账号".into()); }
+        Self::start_snapshot(sources, ClientKind::ClaudeCode, crate::claude_pool::Pool::placeholder()?, Some(pool)).await
+    }
+    async fn start_snapshot(sources: Arc<Sources>, client: ClientKind, snapshot: Snapshot, pool: Option<Arc<crate::claude_pool::Pool>>) -> Result<Arc<Self>> {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|_| "API 本机监听失败")?;
@@ -146,14 +154,15 @@ impl ApiGateway {
             snapshot,
             client,
             key,
-            runtime: Mutex::new(Runtime {
+            runtime: Arc::new(Mutex::new(Runtime {
                 running: true,
                 draining: false,
                 active: 0,
                 logs: VecDeque::new(),
                 history_incomplete: false,
-            }),
-            changed: Notify::new(),
+            })),
+            changed: Arc::new(Notify::new()),
+            pool,
             slots: Arc::new(Semaphore::new(4)),
             cancel: CancellationToken::new(),
         });
@@ -332,7 +341,8 @@ impl Drop for Audit {
         self.log.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         // Persistence happens before waking shutdown, so a normal stop cannot discard
         // its final completed request. A storage failure never changes/replays the API call.
-        let persisted = self.context.sources.record_log(&self.log).is_ok();
+        let mut persisted = self.context.sources.record_log(&self.log).is_ok();
+        if let Some(pool) = &self.context.pool { persisted &= pool.record(&self.log).is_ok(); }
         let mut runtime = self
             .context
             .runtime
@@ -381,7 +391,7 @@ fn authorized(headers: &HeaderMap, key: &str) -> bool {
     };
     supplied.as_bytes().ct_eq(key.as_bytes()).into()
 }
-async fn forward(State(context): State<Arc<Context>>, request: Request) -> Response {
+async fn forward(State(mut context): State<Arc<Context>>, request: Request) -> Response {
     if !authorized(request.headers(), &context.key) {
         return failure(
             StatusCode::UNAUTHORIZED,
@@ -418,7 +428,7 @@ async fn forward(State(context): State<Arc<Context>>, request: Request) -> Respo
         Ok(a) => a,
         Err(r) => return *r,
     };
-    if context
+    if context.pool.is_none() && context
         .sources
         .current(
             &context.snapshot.source.id,
@@ -533,12 +543,27 @@ async fn forward(State(context): State<Arc<Context>>, request: Request) -> Respo
                 "请求缺少有效模型名称",
             );
         }
+        if let Some(pool) = &context.pool {
+            let mut refs=Vec::new(); request_references(&value, &mut refs);
+            let id=match pool.bind(&value,&refs,operation!="messages/count_tokens") { Ok(id)=>id, Err(_)=>return audit.fail(StatusCode::CONFLICT,"claude_account_binding","Claude 原会话账号不可用或身份无法确认；未发送、未切换账号") };
+            let snapshot=match pool.snapshot(&id).await {Ok(s)=>s,Err(_)=>return audit.fail(StatusCode::UNAUTHORIZED,"claude_auth","Claude 原账号授权不可用，请刷新额度或重新授权")};
+            context=Arc::new(Context {sources:context.sources.clone(),snapshot,client:context.client,key:context.key.clone(),runtime:context.runtime.clone(),changed:context.changed.clone(),slots:context.slots.clone(),cancel:context.cancel.clone(),pool:context.pool.clone()});
+            audit.context=context.clone(); audit.log.source_id=id;
+        }
         if validate_context(&context, &parts.headers, &value).is_err() {
             return audit.fail(
                 StatusCode::CONFLICT,
                 "context_source",
                 "会话或上下文原来源无法确认，已阻止发送；请使用原连接或新建会话",
             );
+        }
+    }
+    if raw.is_empty() {
+        if let Some(pool)=&context.pool {
+            let id=match pool.bind(&json!({}),&[],false){Ok(id)=>id,Err(_)=>return audit.fail(StatusCode::SERVICE_UNAVAILABLE,"claude_account_unavailable","没有可用的 Claude 账号")};
+            let snapshot=match pool.snapshot(&id).await{Ok(s)=>s,Err(_)=>return audit.fail(StatusCode::UNAUTHORIZED,"claude_auth","Claude 授权不可用")};
+            context=Arc::new(Context {sources:context.sources.clone(),snapshot,client:context.client,key:context.key.clone(),runtime:context.runtime.clone(),changed:context.changed.clone(),slots:context.slots.clone(),cancel:context.cancel.clone(),pool:context.pool.clone()});
+            audit.context=context.clone();audit.log.source_id=id;
         }
     }
     let mut builder = match context.snapshot.request(parts.method, operation).await {
@@ -563,8 +588,15 @@ async fn forward(State(context): State<Arc<Context>>, request: Request) -> Respo
     if context.snapshot.source.protocol == Protocol::Messages {
         if let Some(beta) = parts.headers.get("anthropic-beta") {
             if beta.as_bytes().len() <= 4096 {
-                builder = builder.header("anthropic-beta", beta);
+                if context.pool.is_some() {
+                    if let Ok(beta)=beta.to_str() { builder=builder.header("anthropic-beta",format!("{},{}",crate::claude_pool::BETA,beta)); }
+                } else { builder = builder.header("anthropic-beta", beta); }
             }
+        }
+    }
+    if context.pool.is_some() {
+        for name in ["user-agent","x-app","x-stainless-lang","x-stainless-package-version","x-stainless-os","x-stainless-arch","x-stainless-runtime","x-stainless-runtime-version"] {
+            if let Some(v)=parts.headers.get(name).filter(|v|v.as_bytes().len()<=512) {builder=builder.header(name,v);}
         }
     }
     let response = tokio::select! {
@@ -577,6 +609,7 @@ async fn forward(State(context): State<Arc<Context>>, request: Request) -> Respo
     };
     let status = response.status();
     audit.log.upstream_status = Some(status.as_u16());
+    if let Some(pool)=&context.pool { let _=pool.failure(&context.snapshot.source.id,status.as_u16()); }
     if !status.is_success() {
         return audit.fail(
             status,
@@ -871,6 +904,7 @@ fn record_output(context: &Context, value: &Value, log: &mut ApiRequestLog) -> R
     context
         .sources
         .contexts(&context.snapshot.scope(), &refs, true)?;
+    if let Some(pool)=&context.pool {pool.bind_output(&context.snapshot.source.id,&refs)?;}
     let response = value.get("response").unwrap_or(value);
     if let Some(model) = crate::usage::model_name(&response["model"]) {
         log.response_model = Some(model);
@@ -889,7 +923,10 @@ fn record_output(context: &Context, value: &Value, log: &mut ApiRequestLog) -> R
         if context.snapshot.source.protocol == Protocol::Messages {
             let current = log.usage.get_or_insert_with(TokenUsage::default);
             if let Some(n) = usage["input_tokens"].as_u64() {
-                current.input_tokens = n;
+                current.input_tokens = if context.pool.is_some() {
+                    n.saturating_add(usage["cache_read_input_tokens"].as_u64().unwrap_or(0))
+                        .saturating_add(usage["cache_creation_input_tokens"].as_u64().unwrap_or(0))
+                } else { n };
                 log.usage_input_known = true;
             }
             if let Some(n) = usage["output_tokens"].as_u64() {
@@ -986,11 +1023,9 @@ impl Observer {
                     .as_u64()
                     .and_then(|index| self.signatures.remove(&index))
                 {
-                    self.context.sources.contexts(
-                        &self.context.snapshot.scope(),
-                        &[context_hash("signature", &signature)],
-                        true,
-                    )?;
+                    let refs=[context_hash("signature", &signature)];
+                    self.context.sources.contexts(&self.context.snapshot.scope(), &refs, true)?;
+                    if let Some(pool)=&self.context.pool {pool.bind_output(&self.context.snapshot.source.id,&refs)?;}
                 }
             }
             if kind == "message_stop" && !self.signatures.is_empty() {

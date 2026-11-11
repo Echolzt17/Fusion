@@ -599,7 +599,8 @@ impl Network {
         } else {
             input.yaml.unwrap_or_default().into_bytes()
         };
-        let parsed = parse_subscription(&bytes)?;
+        let parsed = tokio::task::spawn_blocking(move || parse_subscription(&bytes))
+            .await.map_err(|_| "订阅解析任务异常")??;
         let snapshot = Snapshot {
             version: 1,
             label: name,
@@ -1045,6 +1046,7 @@ impl Network {
         let Ok(_check) = self.checks.try_lock() else {
             return self.status();
         };
+        {let mut token=self.check_cancel.lock().map_err(|_|"节点检查状态不可用")?;if token.is_cancelled(){*token=tokio_util::sync::CancellationToken::new();}}
         let _flag = Flag::new(&self.checking).ok_or("节点检查正在进行")?;
         let _barrier = self.routes.read().await;
         if self.stopping.load(Ordering::SeqCst) {
@@ -1061,9 +1063,6 @@ impl Network {
         let nodes = {
             let state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
             let snapshot = state.snapshot.as_ref().ok_or("请先导入订阅")?;
-            if !state.index.settings.enabled {
-                return Err("请先启用专用网络再检查节点".into());
-            }
             if ids.as_ref().is_some_and(|ids| {
                 ids.len() > MAX_NODES
                     || ids
@@ -1078,12 +1077,6 @@ impl Network {
                 .filter(|node| {
                     ids.as_ref().is_none_or(|ids| ids.contains(&node.id))
                         && !state.index.settings.excluded_node_ids.contains(&node.id)
-                        && state
-                            .index
-                            .health
-                            .get(&node.id)
-                            .and_then(|h| h.cooldown_until)
-                            .is_none_or(|until| until <= crate::now())
                 })
                 .map(|n| n.id.clone())
                 .collect::<Vec<_>>()
@@ -1092,6 +1085,7 @@ impl Network {
             drop(_flag);
             return self.status();
         }
+        let enabled = self.status()?.settings.enabled;
         let runtime = self.ensure_runtime().await?;
         let this = self.clone();
         let checks = stream::iter(nodes)
@@ -1105,7 +1099,7 @@ impl Network {
             })
             .buffer_unordered(4);
         tokio::pin!(checks);
-        loop {
+        let result: Result<()> = async { loop {
             let result = tokio::select! { biased; _ = cancellation.cancelled() => break, result = checks.next() => result };
             let Some((id, delay)) = result else {
                 break;
@@ -1115,12 +1109,15 @@ impl Network {
             }
             let mut state = self.state.lock().map_err(|_| "专用网络状态不可用")?;
             let _ = (id, delay); // probe records a coalesced round exactly once.
-            self.choose(&mut state, "节点连续检查失败，已为后续请求切换")?;
+            if enabled { self.choose(&mut state, "节点连续检查失败，已为后续请求切换")?; }
             self.persistence.save_index(&state.index)?;
-        }
+        } Ok(()) }.await;
+        if !enabled { self.stop_runtime().await?; }
+        result?;
         drop(_flag);
         self.status()
     }
+    pub fn cancel_node_checks(&self) {if let Ok(token)=self.check_cancel.lock(){token.cancel();}}
     fn pause_checks(self: &Arc<Self>) -> CheckPause {
         self.checks_paused.fetch_add(1, Ordering::SeqCst);
         if let Ok(token) = self.check_cancel.lock() {

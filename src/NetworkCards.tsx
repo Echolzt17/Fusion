@@ -40,6 +40,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
   const [draft, setDraft] = useState<NetworkSettings | null>(null);
   const [readError, setReadError] = useState('');
   const [operation, setOperation] = useState('');
+  const [elapsed, setElapsed] = useState(0);
   const [link, setLink] = useState('');
   const [name, setName] = useState('');
   const [importOpen, setImportOpen] = useState(false);
@@ -56,6 +57,8 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
   const revision = useRef(0);
   const reading = useRef(false);
   const operating = useRef(false);
+  const activeCommand = useRef('');
+  const operationStarted = useRef(0);
   const savedSettings = useRef('');
   const selectedSubscription = useRef<string | null>(null);
   const dirtyRef = useRef(false);
@@ -76,7 +79,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (reading.current || operating.current) return;
+    if (reading.current || operating.current && activeCommand.current !== 'network_check') return;
     reading.current = true;
     const version = revision.current;
     try {
@@ -95,10 +98,19 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
   }, [refresh]);
 
   useEffect(() => { if (importOpen) linkInput.current?.focus(); }, [importOpen]);
+  useEffect(() => {
+    setElapsed(0);
+    if (!operation) return;
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [operation]);
 
   const run = async (command: string, args?: Record<string, unknown>, notice?: string, secrets: string[] = []) => {
     if (operating.current) return false;
     operating.current = true;
+    activeCommand.current = command;
+    operationStarted.current = Math.floor(Date.now() / 1000);
     revision.current++;
     setOperation(command);
     setLocalError('');
@@ -113,6 +125,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
       return false;
     } finally {
       operating.current = false;
+      activeCommand.current = '';
       if (mounted.current) setOperation('');
     }
   };
@@ -246,7 +259,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
         </section></details>
 
         <section className="network-section network-nodes-section" aria-label="代理节点列表">
-          <div className="network-card-heading"><div><h3>地区与节点</h3><p className="network-muted">仅显示当前订阅。{status.settings.mode === 'fixed' ? '已固定节点；需要自动切换时可在高级设置中调整。' : '默认自动选点，也可展开地区后手动选择。'}</p></div>{advancedOpen && <button type="button" disabled={blocked || dirty || !status.settings.enabled || !status.nodes.length} onClick={() => void run('network_check', { ids: null })}>{operation === 'network_check' ? '正在检测…' : '检测全部节点'}</button>}</div>
+          <div className="network-card-heading"><div><h3>地区与节点</h3><p className="network-muted">仅显示当前订阅。{status.settings.mode === 'fixed' ? '已固定节点；需要自动切换时可在高级设置中调整。' : '默认自动选点，也可展开地区后手动选择。'}</p></div><button type="button" disabled={blocked || dirty || !status.nodes.length} onClick={() => void run('network_check', { ids: null })}>{operation === 'network_check' ? '正在检测…' : '测试全部延迟'}</button></div>
           {!!status.nodes.length && <label className="network-search-label">查找节点<input type="search" value={filter} onChange={event => setFilter(event.target.value)} placeholder="节点名称或地区" /></label>}
           <div className="network-region-list">
             {!visibleNodes.length && <p className="network-empty">{status.nodes.length ? '没有匹配的节点' : '导入订阅后在这里查看和选择节点'}</p>}
@@ -267,10 +280,10 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
                       <div className="network-node-health"><span className={`network-health network-health-${node.health}`}>{healthNames[node.health]}</span>{node.delayMs !== null && <span>{node.delayMs} ms</span>}<span>检测：{date(node.lastCheckedAt)}</span>{node.cooldownUntil !== null && node.cooldownUntil * 1000 > Date.now() && <span>冷却至 {date(node.cooldownUntil)}</span>}</div>
                       <div className="network-node-business">近期业务：{node.businessSuccesses + node.businessFailures > 0 ? `成功 ${node.businessSuccesses} · 失败 ${node.businessFailures}` : '尚无记录'}<span>地区：{draft.regionOverrides[node.id] ? '手动归类' : '名称推断'}</span></div>
                     </div>
-                    <div className="network-node-actions">
+                    <div className="network-node-actions"><button type="button" disabled={blocked || dirty || excluded} onClick={() => void run('network_check', { ids: [node.id] })}>测试延迟</button>
                       <button type="button" disabled={blocked || dirty || !selectable} onClick={() => void run('network_select', { id: node.id, fixed: false }, '已选为当前节点，自动模式会在故障时使用备用')}>使用</button>
                       {advancedOpen && <><button type="button" disabled={blocked || dirty || !selectable} onClick={() => void run('network_select', { id: node.id, fixed: true }, '已固定节点，故障时等待恢复或手动选择')}>固定</button>
-                      <button type="button" disabled={blocked || dirty || !status.settings.enabled} onClick={() => void run('network_check', { ids: [node.id] })}>检测</button>
+
                       <button type="button" disabled={blocked} onClick={() => { setEditNode(node); setEditRegion(effectiveRegion(node)); setEditError(''); }}>地区</button>
                       <label className="network-exclude"><input type="checkbox" checked={excluded} disabled={blocked} onChange={event => changeDraft({ ...draft, excludedNodeIds: event.target.checked ? [...draft.excludedNodeIds, node.id] : draft.excludedNodeIds.filter(id => id !== node.id) })} />排除</label>
                       <div className="network-order-actions"><button type="button" aria-label={`上移节点 ${node.name}`} disabled={blocked || index === 0} onClick={() => moveNode(node, -1)}>↑</button><button type="button" aria-label={`下移节点 ${node.name}`} disabled={blocked || index === localNodes.length - 1} onClick={() => moveNode(node, 1)}>↓</button></div></>}
@@ -285,7 +298,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
       </div>
       <div className="network-receipt-total"><span>当前可选节点</span><strong>{eligible.length}<small> / {status.nodes.length}</small></strong></div>
       {status.pendingUpdate && <p className="network-callout" role="status">新订阅已验证，正在等待在途请求完成后应用；当前请求继续使用原节点。</p>}
-      {busy && <p className="network-operation" role="status"><span className="spinner" />{operation === 'network_check' ? '正在检测节点，其他板块可继续使用' : operation === 'network_import' ? '正在导入并验证订阅' : operation === 'network_refresh' ? '正在更新订阅' : '正在处理网络操作；如有在途请求，会等待其完成'}</p>}
+      {busy && <p className="network-operation" role="status"><span className="spinner" />{operation === 'network_check' ? `正在测试延迟 · ${status.nodes.filter(n => n.lastCheckedAt !== null && n.lastCheckedAt >= operationStarted.current).length} 个节点已更新 · 已用 ${elapsed} 秒` : operation === 'network_import' ? '正在导入并验证订阅' : operation === 'network_refresh' ? '正在更新订阅' : '正在处理网络操作；如有在途请求，会等待其完成'}{operation === 'network_check' && <button type="button" onClick={() => void invoke('network_cancel_check').catch(e => onError(safeError(e)))}>停止测速</button>}</p>}
       {status.error && <p className="network-callout network-danger" role="alert">{safeError(status.error)}</p>}
       {localError && !importOpen && !removing && <p className="network-callout network-danger" role="alert">{localError}</p>}
     </>}
@@ -293,9 +306,10 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
     {importOpen && <Modal label="导入代理订阅" busy={busy} onClose={() => { clearImport(); setLocalError(''); setImportOpen(false); }}><div className="modal network-import-dialog"><h2>添加代理订阅</h2><p>添加 Clash / Mihomo 订阅链接或本地 YAML，每个订阅最多 8 MiB、1000 个节点。已有订阅保留；添加后选择需要的订阅，再启用代理。</p>
       <label>订阅名称（可选）<input value={name} maxLength={80} disabled={busy} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       <label>HTTPS 订阅链接<input ref={linkInput} type="password" value={link} disabled={busy} onChange={event => setLink(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder="https://…" /></label>
-      <div className="network-import-actions"><button type="button" className="network-primary" disabled={busy || !link.trim()} onClick={() => void importLink()}>导入链接</button><span>或</span><label className={'network-file-button' + (busy ? ' is-disabled' : '')}>选择本地 YAML<input ref={fileInput} type="file" accept=".yaml,.yml,text/yaml,application/yaml" disabled={busy} onChange={event => void importFile(event)} /></label></div>
+      <div className="network-import-actions"><button type="button" className="network-primary" disabled={busy || !link.trim()} onClick={() => void importLink()}>{busy ? '正在导入…' : '导入链接'}</button><span>或</span><label className={'network-file-button' + (busy ? ' is-disabled' : '')}>选择本地 YAML<input ref={fileInput} type="file" accept=".yaml,.yml,text/yaml,application/yaml" disabled={busy} onChange={event => void importFile(event)} /></label></div>
+      {busy && <div role="status" className="network-operation"><span className="spinner" />正在下载、解析并核验订阅 · 已用 {elapsed} 秒。下载最多等待 60 秒，随后核验内核；可在后台继续。</div>}
       {localError && <p className="network-callout network-danger" role="alert">{localError}</p>}
-      <div className="network-actions"><button type="button" disabled={busy} onClick={() => { clearImport(); setLocalError(''); setImportOpen(false); }}>取消</button></div>
+      <div className="network-actions"><button type="button" onClick={() => { if (!busy) { clearImport(); setLocalError(''); } setImportOpen(false); }}>{busy ? '在后台继续' : '取消'}</button></div>
     </div></Modal>}
     {removing && <Modal label="移除代理订阅" busy={busy} onClose={() => { setRemoving(null); setLocalError(''); }}><div className="modal small"><h2>移除 {removing.name}？</h2><p>{removing.id === status?.selectedSubscriptionId ? '这是当前选用的订阅。等待在途请求完成后关闭内置代理，恢复使用系统代理；其他订阅保留，需要时由你重新选用。' : '只移除此订阅及其节点，当前选用的订阅与连接保持。'}</p>{localError && <p className="network-callout network-danger" role="alert">{localError}</p>}<div className="network-actions"><button type="button" disabled={busy} onClick={() => { setRemoving(null); setLocalError(''); }}>取消</button><button type="button" className="network-danger-text" disabled={busy} onClick={() => void run('network_remove', { id: removing.id }, '代理订阅已移除').then(success => { if (success) setRemoving(null); })}>确认移除订阅</button></div></div></Modal>}
     {editNode && draft && <Modal label="修改节点地区" busy={false} onClose={() => setEditNode(null)}><div className="modal small"><h2>修改节点地区</h2><p className="network-node-edit-name">{editNode.name}</p><label>国家／地区<select aria-label="国家／地区" value={Object.hasOwn(regionNames, editRegion) ? editRegion : 'OTHER'} onChange={event => { setEditRegion(event.target.value === 'OTHER' ? '' : event.target.value); setEditError(''); }}>{Object.entries(regionNames).map(([code, label]) => <option key={code} value={code}>{label}{code !== 'UNKNOWN' ? ` · ${code}` : ''}</option>)}<option value="OTHER">其他地区</option></select></label>{!Object.hasOwn(regionNames, editRegion) && <label>两位地区代码<input maxLength={2} value={editRegion} onChange={event => { setEditRegion(event.target.value.toUpperCase()); setEditError(''); }} placeholder="例如 LU" /></label>}<p className="network-muted">原名称推断：{regionLabel(editNode.inferredRegion)}。修改后点击卡组中的“保存节点策略”生效。</p>{editError && <p className="network-danger-text" role="alert">{editError}</p>}<div className="network-actions"><button type="button" onClick={() => setEditNode(null)}>取消</button><button type="button" onClick={() => { changeDraft({ ...draft, regionOverrides: Object.fromEntries(Object.entries(draft.regionOverrides).filter(([id]) => id !== editNode.id)) }); setEditNode(null); }}>恢复名称推断</button><button type="button" className="network-primary" onClick={() => { if (!/^[A-Z]{2}$|^UNKNOWN$/.test(editRegion)) { setEditError('请选择地区，或填写两位地区代码'); return; } changeDraft({ ...draft, regionOverrides: { ...draft.regionOverrides, [editNode.id]: editRegion } }); setEditNode(null); }}>确定地区</button></div></div></Modal>}

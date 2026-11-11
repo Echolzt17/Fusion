@@ -680,9 +680,11 @@ async fn install(app: &tauri::AppHandle, updates: &Updates, manifest: Value, mut
     if !updates.begin_install(&mut cancel) { return Ok(()); }
     updates.phase("finalizing");
     if a.oauth.active() { return Err("请先完成或取消浏览器登录，再重试更新".into()); }
+    if a.claude_login.active() {return Err("请先完成或取消 Claude 登录，再重试更新".into());}
     let _network_checks = a.network.pause_background_checks();
     let _work = updates.work.clone().write_owned().await;
     if a.oauth.active() { return Err("请先完成或取消浏览器登录，再重试更新".into()); }
+    if a.claude_login.active() {return Err("请先完成或取消 Claude 登录，再重试更新".into());}
     let fresh = updates.manifest(STABLE_FEED).await?;
     if fresh != manifest {
         updates.apply_manifest(&fresh, false);
@@ -705,6 +707,7 @@ async fn install(app: &tauri::AppHandle, updates: &Updates, manifest: Value, mut
     }).await?;
     updates.phase("finishing");
     a.accounts.wait_background_idle().await?;
+    a.claude_pool.wait_idle().await?;
     a.network.shutdown().await?;
     if !pool_core::api_config::detached(&config::codex_config_path()?)? {
         return Err("Codex API 接入仍依赖 Fusion，更新已停止".into());

@@ -1,5 +1,13 @@
 # 模块约定
 
+## 2026-11-11 独立 Claude 订阅池与界面修复
+
+用户明确批准 Claude 独立多订阅池。pool-core::claude_pool 使用既有 kv 的独立 v1 目录和会话哈希绑定，Vault 的 claude-pool/ 命名空间保存自主授权令牌，拒绝未来目录版本，无 SQLite schema 迁移。PKCE 回调与待授权状态仅存内存，续期不重放且保留安全收尾。ApiGateway 复用原生 Messages 流观察器、并发和排空，仅订阅模式按会话选定一次账号、重建 OAuth 头；API 来源路径保持。目录/模型查询与 count_tokens 不建立推理会话；工具结果和完整签名必须保留原账号。桌面 claude_commands 仅授权主窗，ApiClients 复用既有受管进程启动/关闭；独立更新和退出检查登录并排空，保持两个池关闭。新版范围覆盖下方旧版“Claude 仅官方登录”描述，不授权厂商混合池。
+
+React 的 ClaudePoolWorkspace 复用启动、打印机、用量与额度/账号卡样式；当前版本移除常驻 ConversationHandoff 的渲染，保留已有手动交接后端，不引入自动跨账号迁移或自动发送历史。普通同账号会话照旧直续，无需首页选择。顶部胶囊长宽/文字/箭头约缩小三分之一。Codex 登录与后续凭据使用只提取身份匹配的套餐字段至独立非秘密 kv，额度失败时保留 Free 等真实已知套餐，不把缺失套餐猜成 Free。
+
+内核 running 状态查询改为 try_lock，避免同步 IPC 等待启动锁；订阅解析放阻塞工作线程。导入弹窗展示经过秒数及后台继续。测速常驻可见，禁用专用出口时临时启动内核检查并停止，不启用出口或改变当前节点；检查时轮询渐进健康结果，可显式取消。真实客户端与用户订阅验收单独记录。
+
 ## 工作区入口与网络卡片布局（源码）
 
 React 顶部用单一 `WorkspaceSwitcher` 下拉选择 Codex / Claude Code / API，触发器采用 Li-Deheng/shy-moth-10 胶囊、随包 Poppins 600 和三箭头动画，展开面板复用 `RecordSelector` 的 quick-panther-98 发光光带与弹性滑块；Codex 进入原订阅池，Claude Code 进入官方登录，API 页内选择目标客户端，仍通过原 IPC 执行。选择工作区或目标客户端只切视图，候选与运行接入继续分开。`RecordSelector` 的自定义触发图标和选择后收起为可选项，已有请求记录筛选保持原交互。

@@ -35,10 +35,10 @@ struct Runtime {
     process:Option<process::ManagedProcess>,
 }
 struct Slot {operation:tokio::sync::Mutex<()>,runtime:tokio::sync::Mutex<Runtime>,status:Mutex<ClientStatus>}
-pub struct ApiClients {store:Arc<Store>,sources:Arc<Sources>,path:PathBuf,codex:Slot,claude:Slot}
+pub struct ApiClients {store:Arc<Store>,sources:Arc<Sources>,path:PathBuf,codex:Slot,claude:Slot,pool:Option<Arc<pool_core::claude_pool::Pool>>}
 fn state_key(client:ClientKind)->&'static str {match client {ClientKind::Codex=>"api-connections/v1/codex-state",ClientKind::ClaudeCode=>"api-connections/v1/claude-state"}}
 impl ApiClients {
-    pub fn new(store:Arc<Store>,sources:Arc<Sources>,path:PathBuf)->Arc<Self> {
+    pub fn new(store:Arc<Store>,sources:Arc<Sources>,path:PathBuf,pool:Option<Arc<pool_core::claude_pool::Pool>>)->Arc<Self> {
         let slot=|client| {
             let mut status=ClientStatus::off(client);
             match store.get(state_key(client)) {
@@ -56,7 +56,7 @@ impl ApiClients {
             Slot {operation:tokio::sync::Mutex::new(()),runtime:tokio::sync::Mutex::new(Runtime {gateway:None,#[cfg(windows)] process:None}),status:Mutex::new(status)}
         };
         let codex=slot(ClientKind::Codex);let claude=slot(ClientKind::ClaudeCode);
-        Arc::new(Self {store,sources,path,codex,claude})
+        Arc::new(Self {store,sources,path,codex,claude,pool})
     }
     fn slot(&self,client:ClientKind)->&Slot {match client {ClientKind::Codex=>&self.codex,ClientKind::ClaudeCode=>&self.claude}}
     fn update(&self,client:ClientKind,f:impl FnOnce(&mut ClientStatus)) {f(&mut self.slot(client).status.lock().unwrap_or_else(|error|error.into_inner()));}
@@ -93,7 +93,10 @@ impl ApiClients {
     }
     pub async fn start(&self,client:ClientKind,id:&str)->Result<()> {
         let slot=self.slot(client);let _operation=slot.operation.try_lock().map_err(|_|"此客户端正在切换，请等待完成")?;
-        let source=self.sources.get(id)?;
+        let source=if client==ClientKind::ClaudeCode && id==pool_core::claude_pool::SOURCE_ID {
+            if !self.pool.as_ref().ok_or("Claude 订阅池不可用")?.ready()? {return Err("请先添加可用的 Claude 订阅账号".into());}
+            pool_core::claude_pool::Pool::client_source()
+        } else {self.sources.get(id)?};
         if !source.enabled || !source.has_key {return Err("API 来源已停用或缺少密钥".into());}
         if !matches!((client,source.protocol),(ClientKind::Codex,Protocol::Responses)|(ClientKind::ClaudeCode,Protocol::Messages)) {
             return Err("来源协议与客户端不兼容".into());
@@ -134,9 +137,14 @@ impl ApiClients {
                     self.update(client,|s|s.phase="verifyingRetries".into());
                     probe::verify(&exe,&source.model).await?;
                     self.update(client,|s|{s.phase="launching".into();s.retry_verified=true;});
-                    let gateway=ApiGateway::start(self.sources.clone(),client,&source.id).await?;
+                    let gateway=if source.id==pool_core::claude_pool::SOURCE_ID {
+                        ApiGateway::start_claude_pool(self.sources.clone(),self.pool.clone().ok_or("Claude 订阅池不可用")?).await?
+                    } else {ApiGateway::start(self.sources.clone(),client,&source.id).await?};
                     let base=gateway.endpoint().base_url().strip_suffix("/v1").ok_or("Claude 本机接口路径无效")?;
-                    let command=process::command(&exe,Some(base),Some(gateway.endpoint().local_key()),Some(&source.model));
+                    // Subscription accounts use Claude's native model selector.
+                    // A manually configured API source still pins its own model.
+                    let model=if source.id==pool_core::claude_pool::SOURCE_ID {None}else{Some(source.model.as_str())};
+                    let command=process::command(&exe,Some(base),Some(gateway.endpoint().local_key()),model);
                     let runtime=&mut *self.slot(client).runtime.lock().await;
                     runtime.gateway=Some(gateway);
                     runtime.process=Some(process::ManagedProcess::spawn(command,false)?);
@@ -181,6 +189,7 @@ impl ApiClients {
         if let Some(gateway)=runtime.gateway.take() {
             gateway.stop().await;
         }
+        if client==ClientKind::ClaudeCode {if let Some(pool)=&self.pool {pool.wait_idle().await?;}}
         self.store.set(state_key(client),"")?;
         self.update(client,|s|*s=ClientStatus::off(client));Ok(())
     }

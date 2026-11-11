@@ -113,7 +113,9 @@ impl KernelBackend for NetworkKernel {
     }
 
     fn running(&self) -> bool {
-        self.process.lock().ok().is_some_and(|state| state.as_ref().is_some_and(native::OwnedProcess::running))
+        // Startup holds this mutex while checking the executable and ports. A
+        // synchronous status IPC must never block the WebView event loop on it.
+        self.process.try_lock().ok().is_some_and(|state| state.as_ref().is_some_and(native::OwnedProcess::running))
     }
 }
 
@@ -233,6 +235,12 @@ mod tests {
         assert_eq!(value["dns"]["enable"].as_bool(), Some(false));
         assert!(value["external-controller-pipe"].is_null());
         assert!(prepare_config("secret: too-short\nlisteners: []", 1, 2).is_err());
+    }
+    #[test]
+    fn status_never_waits_for_the_startup_process_mutex() {
+        let temporary=tempfile::tempdir().unwrap();let kernel=NetworkKernel::new(temporary.path().join("not-started.exe"),temporary.path().join("runtime")).unwrap();
+        let _starting=kernel.process.lock().unwrap();let start=Instant::now();
+        assert!(!kernel.running());assert!(start.elapsed()<Duration::from_millis(100));
     }
 
     #[test]

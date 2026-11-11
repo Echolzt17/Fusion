@@ -56,7 +56,10 @@ pub fn rank(account: &Account) -> Option<u8> {
     }
 }
 pub fn label(account: &Account) -> &'static str {
-    match code(account).to_ascii_lowercase().as_str() {
+    label_code(code(account))
+}
+pub fn label_code(code: &str) -> &'static str {
+    match code.to_ascii_lowercase().as_str() {
         "free" => "Free",
         "go" => "Go",
         "plus" => "Plus",

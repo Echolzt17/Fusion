@@ -289,23 +289,3 @@ export function ApiWorkspace({ client, onClientChange, page, poolMode = false, p
     }}>确认移除</button></div></div></Modal>}
   </div>;
 }
-
-export function ClaudeOfficialWorkspace({ page }: { page: WorkspacePage }) {
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  async function login() {
-    if (busy) return;
-    setBusy(true); setMessage(''); setError('');
-    try { await invoke('open_claude_login'); setMessage('已打开 Claude Code 官方登录入口，请在客户端完成登录；Fusion 不验证或托管本次订阅登录。'); }
-    catch (e) { setError(errorText(e)); }
-    finally { setBusy(false); }
-  }
-  return <div className="cw-workspace"><div className="cw-section cw-official-panel"><span className="cw-eyebrow">CLAUDE CODE / OFFICIAL</span><h2>{page === 'logs' ? '官方登录请求不由 Fusion 托管' : '在 Claude Code 中登录'}</h2><span className="cw-official-badge">官方客户端自登录 · 未托管</span>
-    <p>使用自己的 Claude 订阅时，在未修改的 Claude Code 中完成官方登录。Fusion 不收集、保存或中转 Claude.ai 订阅凭据。</p>
-    <p>{page === 'logs' ? '这里没有官方订阅的请求明细。API 连接的记录请在“API 与中转来源”视图查看。' : '切换此视图不会关闭正在运行的 API 连接。若客户端仍配置为 API，请先在 API 视图正常关闭并恢复原接入，再使用官方登录。'}</p>
-    {page !== 'logs' && <button className="primary" onClick={() => void login()} disabled={busy}>{busy ? '正在打开…' : '打开 Claude Code 官方登录'}</button>}
-    {message && <p className="cw-notice" role="status">{message}</p>}{error && <p className="cw-error" role="alert">{error}</p>}
-    <p className="cw-description">官方登录成功、套餐及额度以 Claude Code 显示为准；这里不会将打开登录入口标为登录成功。</p>
-  </div></div>;
-}

@@ -1,4 +1,4 @@
-Fusion 1.0.11 — third-party license materials
+Fusion 1.0.12-rc.1 — third-party license materials
 
 Generated from the locked Windows x64 dependency tree (including build dependencies conservatively) and npm runtime dependencies. This inventory does not claim every build dependency is embedded in the executable. Upstream source archives are linked per exact version. No dependency source files were modified. The Tauri installer template changes are described in THIRD_PARTY_NOTICES.md.
 

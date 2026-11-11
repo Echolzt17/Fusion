@@ -347,6 +347,16 @@ mod runtime {
             .clone()
     }
     #[tokio::test]
+    async fn latency_checks_work_while_disabled_and_stop_the_temporary_kernel() {
+        let temporary=tempfile::tempdir().unwrap();let kernel=FakeKernel::new();
+        let network=network(&temporary,kernel.clone());import(&network).await;
+        let before=network.status().unwrap();assert!(!before.settings.enabled&&!kernel.running());
+        let status=network.check_nodes(None).await.unwrap();
+        assert!(!status.settings.enabled&&!kernel.running());
+        assert_eq!(status.current_node_id,before.current_node_id);
+        assert!(status.nodes.iter().all(|n|n.delay_ms==Some(12)));
+    }
+    #[tokio::test]
     async fn subscriptions_coexist_and_keep_independent_policy_health_across_restart() {
         let temporary = tempfile::tempdir().unwrap();
         let kernel = FakeKernel::new();

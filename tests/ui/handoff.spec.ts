@@ -41,35 +41,12 @@ async function fixture(page: Page, failSend = false) {
     } });
   }, { failSend });
   await page.goto('/');
-  await page.getByRole('button', { name: '选择聊天续接' }).click();
-  await page.getByLabel('源聊天', { exact: true }).selectOption('source-fixture');
-  await page.getByLabel('目标账号', { exact: true }).selectOption('a');
-}
+ }
 
-test('readable handoff requires separate prepare, create and explicit send, then opens only on request', async ({ page }) => {
+test('the account console has no manual handoff chooser or automatic history migration', async ({ page }) => {
   await fixture(page);
-  await page.getByRole('button', { name: '准备交接', exact: true }).click();
-  await expect(page.getByText('隐藏推理未转移。', { exact: true })).toBeVisible();
-  await page.getByText('查看完整交接消息').click();
-  await expect(page.locator('.handoff-preview pre')).toContainText('保留约束');
-  expect(await page.evaluate(() => (window as any).handoffFixture.calls.some((c: any) => c.command === 'handoff_create'))).toBe(false);
-  await page.getByRole('button', { name: '创建续接聊天', exact: true }).click();
-  await expect(page.getByRole('button', { name: '发送交接并等待确认' })).toBeVisible();
-  expect(await page.evaluate(() => (window as any).handoffFixture.calls.some((c: any) => c.command === 'handoff_send' || c.command === 'handoff_open'))).toBe(false);
-  await page.getByRole('button', { name: '发送交接并等待确认' }).click();
-  await expect(page.getByText('账号池 · 交接轮次已完成')).toBeVisible();
-  await page.getByRole('button', { name: '打开目标聊天' }).click();
-  expect(await page.evaluate(() => (window as any).handoffFixture.calls.filter((c: any) => c.command === 'handoff_send').length)).toBe(1);
-});
-
-test('uncertain send has no replay control and a mismatched route cannot prepare', async ({ page }) => {
-  await fixture(page, true);
-  await page.getByRole('button', { name: '准备交接', exact: true }).click();
-  await page.getByRole('button', { name: '创建续接聊天', exact: true }).click();
-  await page.getByRole('button', { name: '发送交接并等待确认' }).click();
-  await expect(page.getByRole('alert')).toContainText('交接结果未确认');
-  await expect(page.getByRole('button', { name: '发送交接并等待确认' })).toHaveCount(0);
-  await page.getByLabel('目标接入', { exact: true }).selectOption('official');
-  await expect(page.getByRole('button', { name: '准备交接', exact: true })).toBeDisabled();
-  await expect(page.getByText('请先关闭账号池并恢复官方接入，再准备交接。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '我的账号' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '选择聊天续接' })).toHaveCount(0);
+  await expect(page.locator('.handoff-section')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).handoffFixture.calls.filter((c: any) => c.command.startsWith('handoff_')))).toHaveLength(0);
 });

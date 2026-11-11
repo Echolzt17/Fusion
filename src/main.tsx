@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { PoolWidget } from './PoolWidget';
-import { ConversationHandoff } from './ConversationHandoff';
 import { ActiveRequests, type ActiveRequest } from './ActiveRequests';
 import { Modal } from './Modal';
 import { NotificationCenter, useNotifications } from './NotificationCenter';
@@ -17,17 +16,19 @@ import './sidebar.css';
 import { WindowChrome } from './WindowChrome';
 import { ActionButton, ThemeSwitch, PoolPrinter, AccountTool } from './Controls';
 import { RequestRecords, type HistoryIndex } from './RequestRecords';
-import { type Account, type WindowQuota, type Usage, type Log } from './PoolTelemetry';
+import { type Account, type Usage, type Log } from './PoolTelemetry';
 
 import { PrioritySelector, type SelectionPolicy, type SchedulingStatus } from './PrioritySelector';
 import { useUpdates, UpdateButton, UpdateDialog, RepositoryButton } from './UpdatePanel';
 import { LaunchButton } from './LaunchButton';
+import { Quota } from './AccountQuota';
+import { ClaudePoolWorkspace } from './ClaudePoolWorkspace';
 import { SubscriptionCountdown } from './SubscriptionCountdown';
 import { ErrorReport } from './ErrorReport';
 import { UsageDashboard, type DashboardUsage } from './UsageDashboard';
 import { NetworkCards } from './NetworkCards';
 import { PricingCards, usePricing } from './PricingCards';
-import { WorkspaceSwitcher, ApiWorkspace, ClaudeOfficialWorkspace, type ClientId, type WorkspaceView, type ClientStatus } from './ClientWorkspace';
+import { WorkspaceSwitcher, ApiWorkspace, type ClientId, type WorkspaceView, type ClientStatus } from './ClientWorkspace';
 
 type ResetCredits = { available_count: number; credits: { id: string; reset_type: string; status: string; expires_at: string | null }[] };
 type Settings = { port: number; concurrency: number; fixedAccount: string | null; selectionPolicy: SelectionPolicy };
@@ -43,19 +44,6 @@ function Icon({ name }: { name: 'power' | 'grid' | 'activity' | 'server' | 'plus
   const paths = { power: 'M12 3v9M6.3 5.8a8 8 0 1 0 11.4 0', grid: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z', activity: 'M2 12h4l3-8 6 16 3-8h4', server: 'M3 4h18v6H3zM3 14h18v6H3zM7 7h1M7 17h1', plus: 'M12 4v16M4 12h16', arrow: 'M5 12h14M13 6l6 6-6 6' };
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }
-function Quota({ data, fallback, stale }: { data?: WindowQuota; fallback: string; stale: boolean }) {
-  const known = typeof data?.used_percent === 'number' && Number.isFinite(data.used_percent);
-  const remaining = known ? Math.round(Math.max(0, Math.min(100, 100 - data!.used_percent!))) : null;
-  const seconds = data?.limit_window_seconds;
-  const title = seconds ? (seconds >= 86400 ? `${Math.round(seconds / 86400)} 天周期` : `${Math.round(seconds / 3600)} 小时周期`) : fallback;
-  const old = stale || !!data?.reset_at && data.reset_at <= Date.now() / 1000;
-  return <div className={'quota-window ' + (remaining !== null && remaining < 20 ? 'low' : '')}>
-    <div className="quota-title"><span>{title}</span><span>{old ? '上次查询' : '剩余额度'}</span></div>
-    <div className="quota-number">{remaining === null ? '—' : remaining}<small>{remaining === null ? '待查询' : '%'}</small></div>
-    <div className="meter" role="progressbar" aria-label={`${title}剩余额度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining ?? undefined}><i style={{ width: `${remaining ?? 0}%` }} /></div>
-    <div className="quota-reset"><span>重置</span>{data?.reset_at ? <time dateTime={new Date(data.reset_at * 1000).toISOString()} title={date(data.reset_at)}>{new Date(data.reset_at * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</time> : <span>时间未提供</span>}</div>
-  </div>;
-}
 function App() {
   const pricing = usePricing();
   const notifications = useNotifications();
@@ -67,6 +55,8 @@ function App() {
   const [workspace, setWorkspace] = useState<WorkspaceView>('codex');
   const [apiClient, setApiClient] = useState<ClientId>('codex');
   const [apiStatuses, setApiStatuses] = useState<ClientStatus[]>([]);
+  const [claudeAccountCount, setClaudeAccountCount] = useState(0);
+  const acceptClaudeStatus = useCallback((status: ClientStatus) => setApiStatuses(old => [...old.filter(s => s.client !== 'claudeCode'), status]), []);
   const client = workspace === 'api' ? apiClient : workspace;
   const showPool = workspace === 'codex';
   const pageRef = useRef(page); pageRef.current = page;
@@ -261,16 +251,16 @@ function App() {
   return <div className="app">
     <WindowChrome />
     <aside>
-      <nav className="sidebar-nav" aria-label="主导航">{([['accounts', 'grid', '账号控制台'], ['service', 'server', '连接与设置'], ['logs', 'activity', '请求日志']] as const).map(([id, icon, name]) => <button key={id} className={page === id ? 'selected' : ''} aria-label={name} aria-current={page === id ? 'page' : undefined} title={name} onClick={() => setPage(id)}><Icon name={icon} />{name}{id === 'accounts' && <em>{accounts.length}</em>}</button>)}</nav>
+      <nav className="sidebar-nav" aria-label="主导航">{([['accounts', 'grid', '账号控制台'], ['service', 'server', '连接与设置'], ['logs', 'activity', '请求日志']] as const).map(([id, icon, name]) => <button key={id} className={page === id ? 'selected' : ''} aria-label={name} aria-current={page === id ? 'page' : undefined} title={name} onClick={() => setPage(id)}><Icon name={icon} />{name}{id === 'accounts' && <em>{workspace === 'claudeCode' ? claudeAccountCount : accounts.length}</em>}</button>)}</nav>
       <div className="sidebar-bottom"><RepositoryButton controller={updates} /></div>
     </aside>
     <main>
-      <header className="cw-app-header"><div className="cw-workspace-heading"><WorkspaceSwitcher value={workspace} onChange={setWorkspace} />{page !== 'accounts' && <h1 className="cw-page-label">{activeLabel}</h1>}</div><div className="header-actions"><UpdateButton controller={updates} /><NotificationCenter {...notifications} /><ThemeSwitch dark={dark} onChange={() => setDark(v => !v)} /><span className="local-tag"><span className={'dot ' + (apiStatus?.mode === 'running' || client === 'codex' && service.running ? 'on' : '')} />{apiStatus ? apiStateNames[apiStatus.mode] : client === 'claudeCode' ? 'Claude Code API 已关闭' : poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '正在启动账号池' : connection.mode === 'closing' ? '正在关闭账号池' : connection.mode === 'recovery_required' ? '接入需要恢复' : connection.mode === 'off' ? '账号池已关闭' : '正在读取接入状态'}</span></div></header>
+      <header className="cw-app-header"><div className="cw-workspace-heading"><WorkspaceSwitcher value={workspace} onChange={setWorkspace} />{page !== 'accounts' && <h1 className="cw-page-label">{activeLabel}</h1>}</div><div className="header-actions"><UpdateButton controller={updates} /><NotificationCenter {...notifications} /><ThemeSwitch dark={dark} onChange={() => setDark(v => !v)} /><span className="local-tag"><span className={'dot ' + (apiStatus?.mode === 'running' || client === 'codex' && service.running ? 'on' : '')} />{workspace === 'claudeCode' && apiStatus?.sourceId === 'claude-subscription-pool' ? (apiStatus.mode === 'running' ? '账号池已启动' : apiStatus.mode === 'starting' ? '正在启动账号池' : apiStatus.mode === 'stopping' ? '正在关闭账号池' : '接入需要恢复') : apiStatus ? apiStateNames[apiStatus.mode] : client === 'claudeCode' ? '账号池已关闭' : poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '正在启动账号池' : connection.mode === 'closing' ? '正在关闭账号池' : connection.mode === 'recovery_required' ? '接入需要恢复' : connection.mode === 'off' ? '账号池已关闭' : '正在读取接入状态'}</span></div></header>
       {(shutdown || transitioning) && <section role="status" aria-live="polite" className="shutdown-progress"><h2>{shutdown === 'exit' ? '正在退出 Fusion' : connection.mode === 'enabling' ? '正在启动账号池' : '正在关闭账号池'}</h2><p>{phaseLabel[connection.phase || ''] || '正在准备切换…'} · 活动请求 {service.activeRequests} 个 · 已等待 {connection.operationStartedAt ? Math.max(0, Math.floor(clock / 1000 - connection.operationStartedAt)) : 0} 秒</p></section>}
       {failed && <section role="alert"><h2>{retryStart ? '启动未完成' : '关闭未完成'}</h2><p>{startError || connection.error || '客户端切换尚未完成，请重试。'}</p>{retryStart && (connection.configured || connection.recoveryPending || poolOn) && <button disabled={busy || transitioning} onClick={() => void run(() => openShutdown('stop'))}>关闭账号池</button>}</section>}
-      {apiStatus && <div className="conversation-guide" role="status">{client === 'codex' ? 'Codex' : 'Claude Code'} 当前接入：{apiStateNames[apiStatus.mode]}{apiStatus.error ? ` · ${apiStatus.error}` : ''}{showPool ? '。启动账号池将等待当前 API 请求完成并切换接入。' : ''}</div>}
+      {apiStatus && workspace !== 'claudeCode' && <div className="conversation-guide" role="status">{client === 'codex' ? 'Codex' : 'Claude Code'} 当前接入：{apiStateNames[apiStatus.mode]}{apiStatus.error ? ` · ${apiStatus.error}` : ''}{showPool ? '。启动账号池将等待当前 API 请求完成并切换接入。' : ''}</div>}
       {workspace === 'api' && <ApiWorkspace client={apiClient} onClientChange={setApiClient} page={page} poolMode={poolOn} poolBusy={updating} onSwitchToPool={() => setWorkspace('codex')} />}
-      {workspace === 'claudeCode' && <ClaudeOfficialWorkspace page={page} />}
+      {workspace === 'claudeCode' && <ClaudePoolWorkspace page={page} onStatus={acceptClaudeStatus} onCount={setClaudeAccountCount} onDetails={() => setPage('logs')} />}
       {showPool && page === 'accounts' && <div className="accounts-page"><div className="dashboard-summary">
         <section className="launch-panel"><div className="launch-copy"><h2>{poolOn ? '账号池已启动' : connection.mode === 'enabling' ? '账号池启动中' : connection.mode === 'closing' ? '账号池关闭中' : connection.mode === 'recovery_required' ? '账号池需要恢复' : '账号池未启动'}</h2><div className="button-row"><LaunchButton label={poolActionLabel} running={poolOn} transitioning={transitioning} failed={failed} disabled={poolActionDisabled} aria-describedby={activationBlocked ? 'launch-blocked' : undefined} onClick={() => void run(poolAction)} /></div>{activationBlocked && <p id="launch-blocked" role="status">{activationBlocked}</p>}</div><PoolPrinter running={poolOn} /></section>
         <div className="overview-line"><span>可用账号 <b>{available} / {accounts.length}</b></span><span>{scheduling.preferredAccountId ? '手动优先' : '策略分配'}</span><span>用量已上报 <b>{num(measured)} / {num(requests)}</b> 次请求</span></div>
@@ -306,7 +296,6 @@ function App() {
         <PricingCards data={pricing} />
         <NetworkCards poolRunning={poolOn} onError={message => notify({ text: message, error: true })} onNotice={message => notify({ text: message, error: false })} />
       </div>}
-      {showPool && page === 'accounts' && <ConversationHandoff mode={connection.mode} accounts={accounts} disabled={busy} />}
       {showPool && <ActiveRequests requests={service.requests ?? []} accounts={accounts} onChanged={() => { reader.current!.invalidate(); refresh(); }} />}
       <section hidden={page !== 'logs' || !showPool}><div className="section-head"><h2>请求记录</h2><ErrorReport disabled={busy} notify={notify}/></div>
         <RequestRecords accounts={accounts} index={historyIndex} indexError={!!readState['对话统计']?.error} revision={logs} active={page==='logs' && showPool}/>

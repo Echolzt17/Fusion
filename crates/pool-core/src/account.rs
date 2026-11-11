@@ -147,7 +147,19 @@ impl Accounts {
             &serde_json::to_string(&tokens).map_err(|_| "凭据编码失败")?,
         )?;
         self.store.save_account(&a)?;
+        self.remember_plan(&id, &tokens)?;
         Ok(a)
+    }
+    fn remember_plan(&self, id: &str, tokens: &Tokens) -> Result<()> {
+        if let Ok(value) = claims(&tokens.id_token) {
+            let auth = &value["https://api.openai.com/auth"];
+            if auth["chatgpt_account_id"].as_str().is_some_and(|account| format!("{:x}", Sha256::digest(account.as_bytes())) == id) {
+                if let Some(plan) = auth["chatgpt_plan_type"].as_str().filter(|p| !p.is_empty() && p.len() <= 80 && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')) {
+                    self.store.set(&format!("account-plan/v1/{id}"), plan)?;
+                }
+            }
+        }
+        Ok(())
     }
     pub async fn token(self: &Arc<Self>, id: &str) -> Result<Tokens> {
         // Credential rotation must finish even if the client disconnects while refreshing.
@@ -186,6 +198,7 @@ impl Accounts {
             .get(&format!("account/{id}"))?
             .ok_or("账号凭据缺失，请重新授权")?;
         let old: Tokens = serde_json::from_str(&raw).map_err(|_| "账号凭据损坏，请重新授权")?;
+        self.remember_plan(id, &old)?;
         if old.expires_at > now() + 300 {
             return Ok(old);
         }
@@ -210,6 +223,7 @@ impl Accounts {
             &format!("account/{id}"),
             &serde_json::to_string(&t).unwrap(),
         )?;
+        self.remember_plan(id, &t)?;
         Ok(t)
     }
     pub async fn set_state(&self, id: &str, paused: bool) -> Result<()> {

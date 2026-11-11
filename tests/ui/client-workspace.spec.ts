@@ -38,6 +38,9 @@ async function fixture(page: Page) {
           case 'conversation_usage': return { conversations: [] };
           case 'request_history': return { items: [], nextCursor: null };
           case 'update_status': return { phase: 'idle' };
+          case 'claude_pool_status': return {accounts:['a','b'].map((id,index)=>({id:'claude-'+id,email:index ? 'second-claude@example.test' : 'claude@example.test',planLabel:index ? 'Free' : 'Pro',state:'ready',cooldownUntil:0,available:index===0,quota:{rateLimit:{primary_window:{used_percent:index ? 100 : 18,limit_window_seconds:18000}},updatedAt:at},quotaError:null,tokens:{inputTokens:0,outputTokens:0,totalTokens:0},measuredRequests:0,requests:0})),preferred:(state as any).claudePreferred ?? null,client:state.statuses[1],login:{phase:'idle',message:''},logs:[]};
+          case 'claude_pool_account': if(args.action==='select') (state as any).claudePreferred=args.id; return;
+          case 'claude_pool_login': return;
           case 'api_sources': return state.sources;
           case 'api_client_status': if (state.statusError) throw new Error('模拟状态读取失败'); return state.statuses;
           case 'save_api_source': {
@@ -102,8 +105,8 @@ test('the unified workspace dropdown has three English choices and supports keyb
   await expect(picker.locator('.cw-switch-arrow g')).toHaveCount(3);
   const restingWidth = await picker.evaluate(element => element.getBoundingClientRect().width);
   await picker.hover();
-  await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', '25px');
-  expect(await picker.evaluate(element => element.getBoundingClientRect().width)).toBeCloseTo(restingWidth + 25, 0);
+  await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', '16px');
+  expect(await picker.evaluate(element => element.getBoundingClientRect().width)).toBeCloseTo(restingWidth + 16, 0);
   for (const [index, delay] of ['0.6s', '0.4s', '0.2s'].entries()) {
     await expect(picker.locator('.cw-switch-arrow g').nth(index)).toHaveCSS('animation-name', 'cw-switch-color');
     await expect(picker.locator('.cw-switch-arrow g').nth(index)).toHaveCSS('animation-delay', delay);
@@ -129,7 +132,7 @@ test('the unified workspace dropdown has three English choices and supports keyb
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(picker).toHaveText('Claude Code');
-  await expect(page.getByText('官方客户端自登录 · 未托管', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', {name:'claude@example.test',exact:true})).toBeVisible();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Escape');
@@ -162,7 +165,7 @@ test('the longest capsule expands without clipping its label or overflowing narr
       await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', '0px');
       const restingWidth = await picker.evaluate(element => element.getBoundingClientRect().width);
       await picker.hover();
-      const expansion = width === 320 ? 18 : 25;
+      const expansion = width === 320 ? 12 : 16;
       await expect(picker.locator('.cw-switch-arrow')).toHaveCSS('margin-right', `${expansion}px`);
       expect(await picker.evaluate(element => element.getBoundingClientRect().width)).toBeCloseTo(restingWidth + expansion, 0);
       expect(await picker.evaluate(element => {
@@ -173,7 +176,8 @@ test('the longest capsule expands without clipping its label or overflowing narr
           return rect.left >= 0 && rect.right <= innerWidth;
         });
       })).toBe(true);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const overflow = await page.evaluate(() => ({width:innerWidth,scroll:document.documentElement.scrollWidth,offenders:[...document.querySelectorAll('main *')].filter(el => el.getBoundingClientRect().right > innerWidth + 1).map(el => ({tag:el.tagName,cls:el.className,right:Math.round(el.getBoundingClientRect().right)})).slice(0,16)}));
+      expect(overflow.scroll,JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.width);
     }
   }
 });
@@ -189,11 +193,11 @@ test('workspace and API client view changes preserve the subscription page and n
   await codex(page);
   await expect(page.getByRole('heading', { name: 'subscription@example.test', exact: true })).toBeVisible();
   await official(page);
-  await expect(page.getByText('官方客户端自登录 · 未托管', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', {name:'claude@example.test',exact:true})).toBeVisible();
   expect(await calls(page, 'open_claude_login')).toHaveLength(0);
-  await page.getByRole('button', { name: '打开 Claude Code 官方登录', exact: true }).click();
-  expect(await calls(page, 'open_claude_login')).toHaveLength(1);
-  await expect(page.locator('.cw-official-panel').getByRole('status')).toContainText('不验证或托管本次订阅登录');
+  await page.getByRole('button', { name: '添加账号', exact: true }).click();
+  expect(await calls(page, 'claude_pool_login')).toHaveLength(1);
+  expect(await calls(page, 'login')).toHaveLength(0);
   expect(await calls(page, 'start_api_connection')).toHaveLength(0);
 });
 
@@ -344,4 +348,25 @@ test('source drawer fits narrow light and dark workspaces and respects reduced m
     await expect(page.getByRole('button', { name: '＋ 添加来源', exact: true })).toBeFocused();
   }
   console.log('API workspace UI screenshots:', screenshots);
+});
+
+ test('Claude subscription cards have their own selection and quota controls', async ({ page }) => {
+  await fixture(page); await official(page);
+  await expect(page.locator('.claude-pool-workspace .account')).toHaveCount(2);
+  const second=page.locator('.claude-pool-workspace .account').filter({hasText:'second-claude@example.test'});
+  await expect(second).toContainText('Free');
+  await expect(second.locator('.quota-number').first()).toContainText('0');
+  const first=page.locator('.claude-pool-workspace .account').filter({has:page.getByRole('heading',{name:'claude@example.test',exact:true})});
+  await first.getByRole('button',{name:'使用此账号',exact:true}).click();
+  await expect(first).toHaveClass(/active-account/);
+  expect((await calls(page,'claude_pool_account'))[0].args).toEqual({action:'select',id:'claude-a'});
+  expect(await calls(page,'select_account')).toHaveLength(0);
+  const output=mkdtempSync(join(tmpdir(),'fusion-claude-pool-ui-'));
+  await page.setViewportSize({width:1800,height:1100});
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await expect(page.getByRole('button',{name:'添加账号',exact:true})).toBeEnabled();
+  await page.screenshot({path:join(output,'claude-pool-light.png'),fullPage:true,animations:'disabled'});
+  await page.evaluate(()=>document.documentElement.dataset.theme='dark');
+  await page.screenshot({path:join(output,'claude-pool-dark.png'),fullPage:true,animations:'disabled'});
+  console.log('Claude pool UI screenshots: '+output);
 });

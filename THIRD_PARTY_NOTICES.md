@@ -133,3 +133,11 @@ The workspace button bundles the unmodified Poppins SemiBold Latin WOFF2, font v
 
 - Copyright - 2026 Navarog21：https://uiverse.io/Navarog21/ordinary-rat-19 。原始源码来自 uiverse-io/galaxy `Buttons/Navarog21_ordinary-rat-19.html`（Git blob `6c503547b2d898dea97cc70729c410e592bbaa1c`）。保留双描边切角、四角分段发光及两侧箭头往返动画，改为中文日志上报，适配主题、焦点和减少动态效果。
 - Copyright - 2026 Yaya12085：https://uiverse.io/Yaya12085/grumpy-fox-39 。原始源码来自 uiverse-io/galaxy `Cards/Yaya12085_grumpy-fox-39.html`（Git blob `262e536c07fb280eaca8072556b1534e689e44bf`）。保留圆形图标、居中标题/说明和上下双按钮结构，内容替换为实际错误摘要、确认/取消及失败重试。沿用本文 Uiverse MIT 许可全文。
+
+## Claude 独立订阅账号池（2026-11-11）
+
+仅参考固定 Cockpit Tools v1.3.75 的公开 OAuth 常量与协议字段，自行实现账号目录、PKCE 回调、Windows Vault 存储、续期、额度投影和原账号绑定，不复制其运行数据、Cookie、账号文件、客户端补丁或完整代理实现。参考：
+- https://github.com/jlcodes99/cockpit-tools/blob/v1.3.75/src-tauri/src/modules/claude_account_core_storage.rs
+- https://github.com/jlcodes99/cockpit-tools/blob/v1.3.75/sidecars/cockpit-cliproxy/third_party/CLIProxyAPI/internal/auth/claude/anthropic_auth.go
+
+上游采用 MIT，Cockpit 的版权与许可见本文件既有条目；CLIProxyAPI 的源与许可证：https://github.com/router-for-me/CLIProxyAPI/blob/main/LICENSE 。仅参考协议常量及字段，没有复制 TLS 指纹、客户端伪装、提示词改写或重放逻辑。Claude 请求沿用原生 Messages、工具与签名数据；真实服务兼容和客户端验收独立记录。

@@ -4,6 +4,8 @@ use pool_core::network::{NetworkSettings, NetworkStatus, SubscriptionInput};
 
 #[tauri::command]
 pub fn network_status(a: tauri::State<App>) -> Result<NetworkStatus> { a.network.status() }
+#[tauri::command]
+pub fn network_cancel_check(a:tauri::State<App>) {a.network.cancel_node_checks();}
 
 #[tauri::command]
 pub async fn network_import(a: tauri::State<'_, App>, input: SubscriptionInput) -> Result<NetworkStatus> {

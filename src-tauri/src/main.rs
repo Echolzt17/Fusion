@@ -37,12 +37,15 @@ mod pricing;
 mod error_reports;
 mod network_kernel;
 mod network_commands;
+mod claude_commands;
 
 struct App {
     network: Arc<pool_core::network::Network>,
     pricing: pricing::Pricing,
     api_sources: Arc<pool_core::api_sources::Sources>,
     api_clients: Arc<api_clients::ApiClients>,
+    claude_pool: Arc<pool_core::claude_pool::Pool>,
+    claude_login: Arc<pool_core::claude_pool::login::Login>,
     api_sources_lock: tokio::sync::RwLock<()>,
     handoffs: Arc<handoffs::Handoffs>,
     usage_dashboard: Arc<usage_dashboard::UsageDashboard>,
@@ -93,6 +96,7 @@ fn request_close(app: tauri::AppHandle, exit_app: bool) {
             Some(app.state::<App>().updates.freeze_work().await)
         } else { None };
         oauth.cancel();
+        if exit_app {app.state::<App>().claude_login.cancel();app.state::<App>().claude_login.wait_idle().await;}
         let progress = connection.clone();
         let store = app.state::<App>().accounts.store.clone();
         let mut result = async {
@@ -119,9 +123,12 @@ fn request_close(app: tauri::AppHandle, exit_app: bool) {
         if exit_app {
             if network_checks.is_none() { network_checks = Some(app.state::<App>().network.pause_background_checks()); }
             if exit_work.is_none() { exit_work = Some(app.state::<App>().updates.freeze_work().await); }
+            app.state::<App>().claude_login.cancel();
+            app.state::<App>().claude_login.wait_idle().await;
             let closed = app.state::<App>().api_clients.stop_all().await;
             if result.is_ok() { result = closed; }
             if result.is_ok() { result = app.state::<App>().accounts.wait_background_idle().await; }
+            if result.is_ok() { result = app.state::<App>().claude_pool.wait_idle().await; }
             if result.is_ok() { result = app.state::<App>().network.shutdown().await; }
         }
         // Keep the work barrier alive through the final outcome below.
@@ -285,7 +292,8 @@ async fn accounts(a: tauri::State<'_, App>) -> Result<Vec<serde_json::Value>> {
             .into_iter()
             .map(|account| {
                 let mut value = serde_json::to_value(&account).map_err(|_| "账号编码失败")?;
-                value["planLabel"] = serde_json::json!(subscription::label(&account));
+                let fallback = accounts.store.get(&format!("account-plan/v1/{}", account.id))?.unwrap_or_default();
+                value["planLabel"] = serde_json::json!(if subscription::code(&account).is_empty() { subscription::label_code(&fallback) } else { subscription::label(&account) });
                 value["available"] = serde_json::json!(scheduler.available(&account));
                 value["quotaRefreshing"] = serde_json::json!(accounts.quota_refreshing(&account.id));
                 Ok(value)
@@ -625,7 +633,9 @@ fn main() {
                     std::env::current_exe()?,
                 );
                 let api_sources = Arc::new(pool_core::api_sources::Sources::new(accounts.store.clone(), vault::system_vault()?));
-                let api_clients = api_clients::ApiClients::new(accounts.store.clone(), api_sources.clone(), config::codex_config_path()?);
+                let claude_pool=pool_core::claude_pool::Pool::new(accounts.store.clone(),vault::system_vault()?)?;
+                let claude_login=pool_core::claude_pool::login::Login::new(claude_pool.clone());
+                let api_clients = api_clients::ApiClients::new(accounts.store.clone(), api_sources.clone(), config::codex_config_path()?,Some(claude_pool.clone()));
                 let updates = Arc::new(updates::Updates::new(data_dir()?.join("updates")));
                 let dashboard = Arc::new(usage_dashboard::UsageDashboard::default());
                 let codex_root = config::codex_config_path()?.parent().ok_or("Codex 数据目录无效")?.to_path_buf();
@@ -636,6 +646,8 @@ fn main() {
                     pricing: pricing::Pricing::new(data_dir()?.join("ai-pricing")),
                     api_sources,
                     api_clients,
+                    claude_pool,
+                    claude_login,
                     api_sources_lock: tokio::sync::RwLock::new(()),
                     handoffs: Arc::new(handoffs::Handoffs::default()),
                     usage_dashboard: dashboard,
@@ -655,6 +667,7 @@ fn main() {
                 }
                 widget::setup(app)?;
                 quota_refresh::start(app.state::<App>().accounts.clone(), updates);
+                claude_commands::start_background(app.handle().clone());
                 updates::Updates::start(app.handle().clone());
                 let recover =
                     MenuItem::with_id(app, "recover", "恢复官方接入…", true, None::<&str>)?;
@@ -739,6 +752,9 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            claude_commands::claude_pool_status,claude_commands::claude_pool_login,
+            claude_commands::claude_pool_cancel_login,claude_commands::claude_pool_start,
+            claude_commands::claude_pool_stop,claude_commands::claude_pool_account,
             network_commands::network_status,
             network_commands::network_import,
             network_commands::network_refresh,
@@ -746,7 +762,7 @@ fn main() {
             network_commands::network_save_settings,
             network_commands::network_select,
             network_commands::network_select_subscription,
-            network_commands::network_check,
+            network_commands::network_check,network_commands::network_cancel_check,
             network_commands::network_set_enabled,
             network_commands::network_retry,
             ai_pricing,

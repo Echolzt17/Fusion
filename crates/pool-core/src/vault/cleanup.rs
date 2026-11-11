@@ -8,6 +8,10 @@ fn owned_target(target: &str) -> bool {
             let id = rest.split('/').next().unwrap_or_default();
             if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) { return false; }
             &rest[id.len()..]
+        } else if let Some(rest) = key.strip_prefix("claude-pool/claude-") {
+            let id=rest.split('/').next().unwrap_or_default();
+            if id.len()!=32 || !id.bytes().all(|b|b.is_ascii_hexdigit()){return false;}
+            &rest[id.len()..]
         } else if let Some(rest) = key.strip_prefix("network/subscription/") {
             let generation = rest.split('/').next().unwrap_or_default();
             if uuid::Uuid::parse_str(generation).is_err() { return false; }
@@ -30,6 +34,7 @@ pub fn remove_app_credentials() -> Result<()> {
     // Win32 supports prefix filters only, followed by a literal service check.
     // https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credenumeratew
     remove_matching("account/*", owned_target)?;
+    remove_matching("claude-pool/*", owned_target)?;
     remove_matching("api-source/*", owned_target)?;
     remove_matching("network/subscription/*", owned_target)?;
     remove_matching("gateway-key*", owned_target)
@@ -71,6 +76,8 @@ mod tests {
     fn exact_service_and_known_key_shapes_only() {
         let account = format!("account/{}.PersonalCodexPool", "a".repeat(64));
         assert!(owned_target(&account));
+        assert!(owned_target("claude-pool/claude-03ab09f0eebd4de29697506e947e6ffc.PersonalCodexPool"));
+        assert!(!owned_target("claude-pool/other-app.PersonalCodexPool"));
         assert!(owned_target("gateway-key.PersonalCodexPool"));
         assert!(owned_target("gateway-key/03ab09f0-eebd-4de2-9697-506e947e6ffc/0.PersonalCodexPool"));
         let source = "api-source/03ab09f0-eebd-4de2-9697-506e947e6ffc/1-03ab09f0-eebd-4de2-9697-506e947e6ffc";

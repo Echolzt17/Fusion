@@ -1,6 +1,6 @@
 # 项目维护约定
 
-- 当前交付目标是 Windows 本机 Codex 账号池，以及用户已批准的 Codex / Claude Code 独立客户端工作区与手动 API 来源接入。保留原 Codex 订阅池语义；不增加跨厂商订阅池、API 多 Key 自动池化、跨厂商上下文迁移、内置聊天工作台或账号同步。VPN / 节点管理属于另行授权任务，不随本次 API 接入扩展。
+- 当前交付目标是 Windows 本机 Codex 账号池、用户于 2026-11-11 明确批准的 Claude Code 独立多订阅账号池（账号卡、额度、用量、切换），以及独立客户端工作区与手动 API 来源接入。保留原 Codex 订阅池语义；两个厂商独立存储和绑定，不增加跨厂商混合订阅池、API 多 Key 自动池化、跨厂商上下文迁移、内置聊天工作台或账号同步。本轮用户另行授权修复既有 VPN / 节点订阅导入卡顿与延迟测试，不随 API 接入扩展其他网络功能。
 - 先读 README.md、docs/ARCHITECTURE.md 和 docs/MAINTENANCE.md。修改与问题对应的模块，保留无关工作。
 - `crates/pool-core` 不依赖 Tauri；`src-tauri` 负责桌面生命周期和 IPC；React 只通过 IPC 操作。
 - 不复制 Cockpit 数据，不读取或打印真实凭据。不记录请求正文、响应正文、授权头、回调代码或刷新令牌。

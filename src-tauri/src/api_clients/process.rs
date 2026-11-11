@@ -146,6 +146,9 @@ mod tests {
         let env:Vec<_>=command.get_envs().collect();
         assert!(env.iter().any(|(key,value)|*key=="CLAUDE_CODE_MAX_RETRIES"&&*value==Some(std::ffi::OsStr::new("0"))));
         assert!(env.iter().any(|(key,value)|*key=="CLAUDE_CODE_OAUTH_TOKEN"&&value.is_none()));
+        let subscription=super::command(Path::new("C:\\fixture\\claude.exe"),Some("http://127.0.0.1:1/fusion-pool"),Some("public-fixture-key"),None);
+        assert!(!subscription.get_args().any(|a|a=="--model"));
+        assert!(!subscription.get_envs().any(|(key,value)|key.to_string_lossy().starts_with("ANTHROPIC_DEFAULT_")&&value.is_some()));
     }
     #[test]
     fn hidden_owned_job_starts_suspended_and_reaps_its_own_process() {

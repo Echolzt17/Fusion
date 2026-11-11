@@ -336,6 +336,7 @@ impl Sources {
             key,
             http: UpstreamHttp::new()?,
             direct: direct_client()?,
+            oauth: false,
         })
     }
     pub(crate) fn current(&self, id: &str, revision: u64) -> Result<()> {
@@ -557,8 +558,12 @@ pub(crate) struct Snapshot {
     key: String,
     http: UpstreamHttp,
     direct: reqwest::Client,
+    oauth: bool,
 }
 impl Snapshot {
+    pub(crate) fn claude(source: ApiSource, key: String)->Result<Self> {
+        Ok(Self {source,key,http:UpstreamHttp::new()?,direct:direct_client()?,oauth:true})
+    }
     pub fn scope(&self) -> String {
         format!("{}/{}", self.source.id, self.source.revision)
     }
@@ -585,6 +590,10 @@ impl Snapshot {
             NetworkMode::SystemProxy => self.http.request(method, &endpoint).await?.0,
         };
         Ok(match self.source.protocol {
+            Protocol::Messages if self.oauth => request.bearer_auth(&self.key)
+                .header("anthropic-version", "2023-06-01")
+                .header("anthropic-beta", crate::claude_pool::BETA)
+                .header("x-app", "cli"),
             Protocol::Messages => request
                 .header("x-api-key", &self.key)
                 .header("anthropic-version", "2023-06-01"),
