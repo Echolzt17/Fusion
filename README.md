@@ -6,22 +6,22 @@
 
 Windows 本机账号池 · 会话固定账号 · 额度与用量可见 · 一键启停
 
-**当前版本：1.0.12-rc.1 候选源码 · Windows 10 / 11 x64**
+**当前版本：1.0.12 · Windows 10 / 11 x64**
 
-最新正式安装版仍为 **1.0.11**；本次提交源码，不发布候选安装包或修改自动更新清单。
+本版按维护者明确要求正式发布，支持应用内检查更新；自动检查与真实客户端验收分别记录。
 
-[下载 v1.0.11 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.11/Fusion_1.0.11_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.11) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.12 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.12/Fusion_1.0.12_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.12) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
-## 1.0.12-rc.1 候选源码
+## v1.0.12 的改进
 
 - 移除首页聊天续接选择块，工作区胶囊整体缩小约三分之一；原账号会话继续沿用原绑定。
 - Claude Code 增加独立多订阅账号池，提供账号卡、浏览器授权、额度、用量及首选切换；保留原生模型选择，不与 Codex 混池。
 - 修正导入订阅时同步状态查询等待内核锁的问题；显示导入进度并可后台继续。未启用专用出口也可测试节点延迟，支持进度和停止。
 - Codex 从身份匹配的本账号授权信息保留 Free 等已知套餐，额度查询失败不再丢失已识别套餐。
 
-自动回归：核心 235 项、桌面 82 项、界面 99 项通过；另有 11 项忽略。构建和候选更新签名核验通过。真实 Claude 登录、额度、多轮工具、用户订阅与覆盖安装仍待验收；自动测试不能替代这些项目。
+自动回归：核心 235 项、桌面 82 项、界面 99 项通过；另有 11 项忽略。构建和更新签名核验分别确认。真实 Claude 登录、额度、多轮工具、用户订阅与覆盖安装仍待验收；自动测试不能替代这些项目。
 
 ## Fusion 能做什么？
 
@@ -36,7 +36,7 @@ Fusion 是面向 Windows 本机 Codex 桌面客户端的账号池工具。添加
 | 查看消耗和运行情况 | 本机累计 Token、近 7 天趋势、今日每小时使用时长、池内请求记录和 Codex 内胶囊概览 |
 | 方便开启和退出 | 一键启动；关闭时恢复启用前的接入，等待在途请求并完整退出 Codex |
 
-每个账号仍受自身套餐、模型权限、额度和上游服务状态限制。Fusion 不合并订阅额度，也不提高单账号限额。每台电脑独立运行、独立授权。Codex、候选版 Claude 订阅池与手动 API 来源分别管理，没有跨厂商混合订阅池、API Key 自动池化或跨电脑账号同步。
+每个账号仍受自身套餐、模型权限、额度和上游服务状态限制。Fusion 不合并订阅额度，也不提高单账号限额。每台电脑独立运行、独立授权。Codex、Claude 订阅池与手动 API 来源分别管理，没有跨厂商混合订阅池、API Key 自动池化或跨电脑账号同步。
 
 ## v1.0.11 的改进
 
