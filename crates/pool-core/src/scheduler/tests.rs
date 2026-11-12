@@ -9,6 +9,57 @@ fn cooling(store: &Store, id: &str, seconds: i64) {
 }
 
 #[tokio::test]
+async fn chat_preference_uses_backup_only_after_the_original_is_unavailable() {
+    let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+    let scheduler = Scheduler::new(accounts.store.clone());
+    scheduler.select_account(Some("b".into())).unwrap();
+    let original = scheduler.acquire_portable_observed(Some("a"), false, |_| {}).await.unwrap();
+    assert_eq!(original.account.id, "a");
+    drop(original);
+    cooling(&accounts.store, "a", 120);
+    let backup = scheduler.acquire_portable_observed(Some("a"), false, |_| {}).await.unwrap();
+    assert_eq!(backup.account.id, "b");
+    assert!(scheduler.acquire(Some("a")).await.is_err());
+    drop(backup);
+    cooling(&accounts.store, "a", 0);
+    let mut exhausted = accounts.store.account("a").unwrap();
+    exhausted.quota = Some(json!({"updatedAt":now(),"rateLimit":{"allowed":false,
+        "primary_window":{"used_percent":100,"reset_at":now()+3600}}}));
+    accounts.store.save_account(&exhausted).unwrap();
+    assert_eq!(scheduler.acquire_portable_observed(Some("a"), false, |_| {}).await.unwrap().account.id, "b");
+    assert!(scheduler.acquire(Some("a")).await.is_err());
+}
+
+#[tokio::test]
+async fn chat_preference_waits_for_busy_original_and_rechecks_its_health() {
+    let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+    let scheduler = Scheduler::new(accounts.store.clone());
+    scheduler.save_service_settings(18765, 1).unwrap();
+    let lease = scheduler.acquire(Some("a")).await.unwrap();
+    let s = scheduler.clone();
+    let pending = tokio::spawn(async move {
+        s.acquire_portable_observed(Some("a"), false, |_| {}).await
+    });
+    tokio::time::sleep(PREFERENCE_WAIT + Duration::from_millis(100)).await;
+    assert!(!pending.is_finished());
+    assert!(!scheduler.is_active("b"));
+    drop(lease);
+    let original = tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap().unwrap().unwrap();
+    assert_eq!(original.account.id, "a");
+    drop(original);
+
+    let lease = scheduler.acquire(Some("a")).await.unwrap();
+    let s = scheduler.clone();
+    let pending = tokio::spawn(async move {
+        s.acquire_portable_observed(Some("a"), false, |_| {}).await
+    });
+    cooling(&accounts.store, "a", 120);
+    let backup = tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap().unwrap().unwrap();
+    assert_eq!(backup.account.id, "b");
+    drop(lease); drop(backup);
+}
+
+#[tokio::test]
 async fn short_cooldown_waits_without_a_lease_and_never_moves_a_bound_request() {
     let (_d, accounts) = fixture();
     add(&accounts, "a"); add(&accounts, "b");

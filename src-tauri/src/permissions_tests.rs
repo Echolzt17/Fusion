@@ -60,6 +60,7 @@ api_fixture_commands!(api_sources, save_api_source, remove_api_source, check_api
     api_client_status, start_api_connection, stop_api_connection, api_request_logs, open_claude_login,
     ai_pricing, open_pricing_website);
 api_fixture_commands!(claude_pool_status,claude_pool_login,claude_pool_cancel_login,claude_pool_start,claude_pool_stop,claude_pool_account);
+api_fixture_commands!(local_projects_status, restore_local_projects, open_local_chat);
 api_fixture_commands!(network_status, network_import, network_refresh, network_remove,
     network_save_settings, network_select, network_select_subscription, network_check,network_cancel_check, network_set_enabled, network_retry);
 #[tauri::command]
@@ -89,6 +90,7 @@ fn widget_cannot_invoke_account_configuration_or_exit_commands() {
             prepare_error_report, submit_error_report, error_report_status, save_error_report,
             handoff_chats,handoff_prepare,handoff_create,handoff_send,handoff_status,handoff_cancel,handoff_open,
             usage_dashboard,
+            local_projects_status, restore_local_projects, open_local_chat,
             update_status, check_update, install_update, dismiss_update_prompt, open_update_repair, open_project_repository,
             login,
             remove_account,
@@ -132,6 +134,7 @@ fn widget_cannot_invoke_account_configuration_or_exit_commands() {
         "prepare_error_report", "submit_error_report", "error_report_status", "save_error_report",
         "handoff_chats","handoff_prepare","handoff_create","handoff_send","handoff_status","handoff_cancel","handoff_open",
         "usage_dashboard",
+        "local_projects_status", "restore_local_projects", "open_local_chat",
         "update_status", "check_update", "install_update", "dismiss_update_prompt", "open_update_repair", "open_project_repository",
         "login",
         "remove_account",

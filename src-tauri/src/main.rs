@@ -26,6 +26,7 @@ mod quota_refresh;
 mod usage_dashboard;
 mod widget;
 mod handoffs;
+mod local_projects;
 mod api_clients;
 mod api_commands;
 mod widget_input;
@@ -48,6 +49,7 @@ struct App {
     claude_login: Arc<pool_core::claude_pool::login::Login>,
     api_sources_lock: tokio::sync::RwLock<()>,
     handoffs: Arc<handoffs::Handoffs>,
+    local_project_restorer: local_projects::Restorer,
     usage_dashboard: Arc<usage_dashboard::UsageDashboard>,
     reports: Arc<error_reports::Reports>,
     updates: Arc<updates::Updates>,
@@ -413,6 +415,91 @@ async fn usage_dashboard(a: tauri::State<'_, App>) -> Result<pool_core::local_us
     a.usage_dashboard.snapshot()
 }
 #[tauri::command]
+async fn local_projects_status(a: tauri::State<'_, App>) -> Result<local_projects::ProjectStatus> {
+    let _work = a.updates.enter_work()?;
+    let store = a.accounts.store.clone();
+    let home = config::codex_config_path()?.parent().ok_or("Codex 数据目录无效")?.to_path_buf();
+    blocking(move || local_projects::status(&store, &home)).await
+}
+
+struct LocalProjectAdapter {
+    handle: tauri::AppHandle,
+    home: std::path::PathBuf,
+}
+impl local_projects::RestoreAdapter for LocalProjectAdapter {
+    async fn conditions(&self) -> Result<local_projects::RestoreConditions> {
+        let a = self.handle.state::<App>();
+        let state = a.connection.status().await?;
+        let service = a.gateway.status().await;
+        let api_owned = a.api_clients.has_connection(pool_core::api_sources::ClientKind::Codex).await?;
+        let closing = a.close.lock().map_err(|_| "客户端关闭状态不可读")?.running
+            || a.updates.installing.load(std::sync::atomic::Ordering::SeqCst);
+        Ok(local_projects::RestoreConditions {
+            client_running: codex_lifecycle::running_identity(false).is_ok(),
+            connection_stable: !api_owned && matches!(state.mode, "on" | "off")
+                && !state.recovery_pending && state.reload_required.is_none() && !service.draining,
+            closing,
+            active_requests: service.active_requests,
+        })
+    }
+    fn snapshot(&self) -> Result<local_projects::NativeSnapshot> {
+        local_projects::read_snapshot(&self.home)
+    }
+    fn open_directory(&self, url: &str) -> Result<()> {
+        // The UI supplies no URL/path. Only the fixed native route assembled from
+        // validated local directory metadata can reach the desktop opener.
+        let parsed = reqwest::Url::parse(url).map_err(|_| "项目入口地址无效")?;
+        let pairs = parsed.query_pairs().collect::<Vec<_>>();
+        if parsed.scheme() != "codex" || parsed.host_str() != Some("new")
+            || !parsed.path().is_empty() || parsed.fragment().is_some()
+            || pairs.len() != 1 || pairs[0].0 != "path"
+        { return Err("不支持的项目入口地址，未打开客户端".into()); }
+        let a = self.handle.state::<App>();
+        let close = a.close.lock().map_err(|_| "客户端关闭状态不可读")?;
+        if close.running || a.updates.installing.load(std::sync::atomic::Ordering::SeqCst)
+            || codex_lifecycle::running_identity(false).is_err()
+        { return Err("Codex 已关闭或正在退出，未打开项目入口".into()); }
+        self.handle.opener().open_url(url, None::<&str>).map_err(|_| "无法打开本机项目入口，请在 Codex 手动打开该目录".into())
+    }
+}
+
+#[tauri::command]
+async fn restore_local_projects(app: tauri::AppHandle) -> Result<local_projects::RestoreOutcome> {
+    let a = app.state::<App>();
+    let _work = a.updates.enter_work()?;
+    let _switch = a.lifecycle.clone().try_lock_owned().map_err(|_| "接入正在切换，请稍后恢复本机项目入口")?;
+    let home = config::codex_config_path()?.parent().ok_or("Codex 数据目录无效")?.to_path_buf();
+    let adapter = LocalProjectAdapter { handle: app.clone(), home };
+    a.local_project_restorer.restore(&a.accounts.store, &adapter).await
+}
+
+#[tauri::command]
+async fn open_local_chat(app: tauri::AppHandle, id: String, cursor: Option<String>, archived: bool) -> Result<()> {
+    use local_projects::RestoreAdapter;
+    let route = local_projects::local_chat_route(&id, cursor.as_deref())?;
+    let a = app.state::<App>();
+    let _work = a.updates.enter_work()?;
+    let _switch = a.lifecycle.clone().try_lock_owned().map_err(|_| "接入正在切换，请稍后打开聊天")?;
+    let home = config::codex_config_path()?.parent().ok_or("Codex 数据目录无效")?.to_path_buf();
+    let adapter = LocalProjectAdapter { handle: app.clone(), home };
+    adapter.conditions().await?.check()?;
+    if adapter.snapshot()?.owner_hash.is_none() { return Err("请先在 Codex 完成登录，再打开本机历史".into()); }
+    // Verify against exactly the read-only native catalogue page the user saw.
+    // No thread/read, turns, message text, account globals or identity are copied.
+    let page = handoffs::handoff_chats(cursor, archived).await?;
+    if !page["data"].as_array().is_some_and(|rows| rows.iter().any(|r| r["id"].as_str() == Some(id.as_str()))) {
+        return Err("该聊天不在当前本机历史目录页，请刷新列表后重试".into());
+    }
+    adapter.conditions().await?.check()?;
+    let close = a.close.lock().map_err(|_| "客户端关闭状态不可读")?;
+    if close.running || a.updates.installing.load(std::sync::atomic::Ordering::SeqCst)
+        || codex_lifecycle::running_identity(false).is_err()
+    { return Err("Codex 已关闭或正在退出，未打开聊天".into()); }
+    // A fixed local host avoids guessing a cloud-account host from its catalogue.
+    app.opener().open_url(route, None::<&str>)
+        .map_err(|_| "无法打开本机聊天，请在 Codex 查看历史列表".into())
+}
+#[tauri::command]
 async fn select_account(a: tauri::State<'_, App>, account_id: Option<String>) -> Result<()> {
     let _work = a.updates.enter_work()?;
     let scheduler = a.gateway.scheduler.clone();
@@ -650,6 +737,7 @@ fn main() {
                     claude_login,
                     api_sources_lock: tokio::sync::RwLock::new(()),
                     handoffs: Arc::new(handoffs::Handoffs::default()),
+                    local_project_restorer: local_projects::Restorer::default(),
                     usage_dashboard: dashboard,
                     reports: Arc::new(error_reports::Reports::new(data_dir()?.join("error-reports"))),
                     updates: updates.clone(),
@@ -821,6 +909,9 @@ fn main() {
             conversation_usage,
             usage,
             usage_dashboard,
+            local_projects_status,
+            restore_local_projects,
+            open_local_chat,
             image_compatibility,
             select_account,
             scheduling_status,

@@ -52,7 +52,8 @@ pub(crate) fn isolated_command(engine: &Path, root: &Path) -> std::process::Comm
     command
 }
 fn authorized(h: &HeaderMap) -> bool {
-    h.get("x-fusion-client-key").and_then(|v| v.to_str().ok()) == Some("fusion-public-fixture-key")
+    h.get(http::header::CONTENT_ENCODING).is_none()
+        && h.get("x-fusion-client-key").and_then(|v| v.to_str().ok()) == Some("fusion-public-fixture-key")
         && h.get("x-openai-actor-authorization")
             .and_then(|v| v.to_str().ok())
             == Some("fusion-local")
@@ -199,15 +200,16 @@ fn router(shared: Shared) -> Router {
 pub(crate) fn configure(root: &Path, address: std::net::SocketAddr) -> Result<()> {
     let mut d = DocumentMut::new();
     d["model"] = value("gpt-6.1-sol");
-    d["model_provider"] = value("fusion_fixture");
+    d["model_provider"] = value("personal_codex_pool");
     d["cli_auth_credentials_store"] = value("file");
     d["chatgpt_base_url"] = value(format!("http://{address}"));
     d["features"] = Item::Table(Table::new());
     d["features"]["image_generation"] = value(true);
+    d["features"]["enable_request_compression"] = value(false);
     d["analytics"] = Item::Table(Table::new());
     d["analytics"]["enabled"] = value(false);
     d["model_providers"] = Item::Table(Table::new());
-    d["model_providers"]["fusion_fixture"] = Item::Table(config::provider_config(
+    d["model_providers"]["personal_codex_pool"] = Item::Table(config::provider_config(
         &format!("http://{address}/v1"),
         "fusion-public-fixture-key",
     )?);

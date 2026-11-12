@@ -11,6 +11,9 @@ pub mod history;
 pub mod summary;
 mod reliability;
 mod local_usage;
+pub mod replay_guard;
+#[cfg(test)]
+mod chat_bindings_tests;
 use history::RecentRequest;
 
 pub struct Store {
@@ -179,6 +182,61 @@ impl Store {
     }
     pub fn bind(&self, key: &str, account: &str) -> Result<()> {
         self.bind_many(&[key.to_owned()], account)
+    }
+    /// Switch only a verified portable chat's preference. Upstream references
+    /// remain immutable in `bind_many`; callers must validate the input and
+    /// reserve the target account before attempting this compare-and-swap.
+    pub fn switch_chat_bindings(
+        &self,
+        keys: &[String],
+        expected: &str,
+        account: &str,
+    ) -> Result<()> {
+        let valid_chat_key = |key: &str| {
+            key.strip_prefix("thread:")
+                .or_else(|| key.strip_prefix("session:"))
+                .is_some_and(|hash| {
+                    hash.len() == 64
+                        && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+        };
+        if keys.is_empty() || keys.iter().any(|key| !valid_chat_key(key)) {
+            return Err("仅允许切换已核验聊天的账号偏好，不能修改上下文引用绑定".into());
+        }
+        let mut db = self.db.lock().map_err(|_| "数据库锁异常")?;
+        let tx = db.transaction().map_err(|_| "切换聊天账号事务失败")?;
+        for key in keys {
+            use rusqlite::OptionalExtension;
+            let retired: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)",
+                [format!("retired-binding/{key}")], |r| r.get(0),
+            ).map_err(|_| "读取会话状态失败")?;
+            if retired {
+                return Err("原会话账号已删除，请新建会话".into());
+            }
+            let existing: Option<(String, i64)> = tx.query_row(
+                "SELECT account,expires FROM bindings WHERE key=?1", [key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional().map_err(|_| "读取会话绑定失败")?;
+            match existing {
+                Some((_, expires)) if expires < crate::now() => {
+                    return Err("会话绑定已过期，请新建会话".into());
+                }
+                Some((current, _)) if current == expected => {}
+                _ => return Err("聊天账号偏好已变化；本次请求未发送，请重试".into()),
+            }
+        }
+        for key in keys {
+            tx.execute(
+                "UPDATE bindings SET account=?1,expires=?2 WHERE key=?3",
+                params![account, crate::now() + 30 * 86400, key],
+            ).map_err(|_| "保存聊天账号偏好失败")?;
+            tx.execute(
+                "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![format!("portable-chat/v1/{key}"), account],
+            ).map_err(|_| "保存聊天可移植状态失败")?;
+        }
+        tx.commit().map_err(|_| "切换聊天账号事务失败".into())
     }
     pub fn bind_many(&self, keys: &[String], account: &str) -> Result<()> {
         if keys.is_empty() {

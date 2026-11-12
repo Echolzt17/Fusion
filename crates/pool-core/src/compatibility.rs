@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 pub(crate) mod probe;
-const PROBE_REVISION: u32 = 2;
+const PROBE_REVISION: u32 = 3;
 const CERTIFICATE: &str = "native_protocol_certificate";
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -43,6 +43,10 @@ struct Backup {
     #[serde(default)]
     applied_image_feature: Option<String>,
     #[serde(default)]
+    original_compression: Option<String>,
+    #[serde(default)]
+    applied_compression: Option<String>,
+    #[serde(default)]
     previous: Option<Owned>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -53,6 +57,8 @@ struct Owned {
     image_feature: String,
     #[serde(default)]
     profile: Option<String>,
+    #[serde(default)]
+    compression: Option<String>,
 }
 fn image_feature(doc: &DocumentMut) -> String {
     let mut d = DocumentMut::new();
@@ -61,6 +67,44 @@ fn image_feature(doc: &DocumentMut) -> String {
         d["features"]["image_generation"] = v.clone();
     }
     d.to_string()
+}
+fn compression_fields_doc(doc: &DocumentMut) -> DocumentMut {
+    let mut d = DocumentMut::new();
+    if let Some(v) = doc.get("features").and_then(|f| f.get("enable_request_compression")) {
+        d["features"]["enable_request_compression"] = v.clone();
+    }
+    if let Ok(Some((name, p))) = recovery::active(doc) {
+        d["profile"] = value(name);
+        if let Some(v) = p.get("features").and_then(|f| f.get("enable_request_compression")) {
+            d["profiles"][name]["features"]["enable_request_compression"] = v.clone();
+        }
+    }
+    d
+}
+fn compression_fields(doc: &DocumentMut) -> String { compression_fields_doc(doc).to_string() }
+fn restore_compression(doc: &mut DocumentMut, saved: &str) -> Result<()> {
+    let source = parse(saved)?;
+    if let Some(v) = source.get("features").and_then(|f| f.get("enable_request_compression")) {
+        doc["features"]["enable_request_compression"] = v.clone();
+    } else if let Some(features) = doc.get_mut("features").and_then(Item::as_table_like_mut) {
+        features.remove("enable_request_compression");
+        if features.is_empty() { doc.remove("features"); }
+    }
+    if let Some(name) = source.get("profile").and_then(Item::as_str) {
+        let original = source.get("profiles").and_then(|p| p.get(name)).and_then(|p| p.get("features"))
+            .and_then(|f| f.get("enable_request_compression"));
+        if let Some(profile) = doc.get_mut("profiles").and_then(|p| p.get_mut(name)).and_then(Item::as_table_like_mut) {
+            if let Some(v) = original {
+                if !profile.contains_key("features") { profile.insert("features", Item::Table(Table::new())); }
+                profile.get_mut("features").and_then(Item::as_table_like_mut).ok_or("原 profile 功能配置无效")?
+                    .insert("enable_request_compression", v.clone());
+            } else if let Some(features) = profile.get_mut("features").and_then(Item::as_table_like_mut) {
+                features.remove("enable_request_compression");
+                if features.is_empty() { profile.remove("features"); }
+            }
+        }
+    }
+    Ok(())
 }
 fn managed_matches(doc: &DocumentMut, b: &Backup) -> bool {
     equivalent(&selected(doc), &b.applied_selection)
@@ -71,6 +115,7 @@ fn managed_matches(doc: &DocumentMut, b: &Backup) -> bool {
         && b.applied_image_feature
             .as_ref()
             .is_none_or(|f| equivalent(&image_feature(doc), f))
+        && b.applied_compression.as_ref().is_none_or(|c| equivalent(&compression_fields(doc), c))
 }
 fn previous_matches(doc: &DocumentMut, b: &Backup) -> bool {
     b.previous.as_ref().is_some_and(|p| {
@@ -80,6 +125,7 @@ fn previous_matches(doc: &DocumentMut, b: &Backup) -> bool {
             && p.profile
                 .as_ref()
                 .is_none_or(|p| equivalent(&profile_selection(doc), p))
+            && p.compression.as_ref().is_none_or(|c| equivalent(&compression_fields(doc), c))
     })
 }
 fn backup(store: &Store) -> Result<Option<Backup>> {
@@ -105,13 +151,16 @@ fn fragment(doc: &DocumentMut) -> String {
             headers.insert("x-fusion-client-key", value("<本机接入密钥已隐藏>"));
         }
     }
-    format!(
-        "{}{}{}{}",
-        selected(doc),
-        profile_selection(doc),
-        image_feature(doc),
-        provider(&redacted)
-    )
+    let mut output = compression_fields_doc(&redacted);
+    if let Some(v) = redacted.get("model_provider") { output["model_provider"] = v.clone(); }
+    if let Ok(Some((name, p))) = recovery::active(&redacted) {
+        if let Some(v) = p.get("model_provider") { output["profiles"][name]["model_provider"] = v.clone(); }
+    }
+    if let Some(v) = redacted.get("features").and_then(|f| f.get("image_generation")) {
+        output["features"]["image_generation"] = v.clone();
+    }
+    if let Some(v) = redacted.get("model_providers").and_then(|p| p.get(PROVIDER)) { output["provider"] = v.clone(); }
+    output.to_string()
 }
 pub fn image_ready(store: &Store, path: &Path) -> Result<bool> {
     let d = parse(&read(path)?)?;
@@ -120,10 +169,12 @@ pub fn image_ready(store: &Store, path: &Path) -> Result<bool> {
         toml_edit::de::from_str(&d.to_string()).map_err(|_| "配置格式错误")?;
     Ok(is_applied(store, path)?
         && v["features"]["image_generation"] == true
+        && v["features"]["enable_request_compression"] == false
         && v["model_providers"][PROVIDER]["http_headers"]["x-openai-actor-authorization"]
             == "fusion-local"
         && v["model_providers"][PROVIDER]["stream_idle_timeout_ms"] == 600000
         && v["model_providers"][PROVIDER]["requires_openai_auth"] == true
+        && v["model_providers"][PROVIDER]["capabilities"]["remote_compaction"] == "unsupported"
         && v["model_providers"][PROVIDER]["http_headers"]["x-fusion-client-key"].as_str().is_some_and(|s| !s.is_empty())
         && v["model_providers"][PROVIDER]["auth"].is_null())
 }
@@ -232,13 +283,20 @@ fn install(doc: &mut DocumentMut, port: u16, client_key: &str) -> Result<()> {
         doc["features"] = Item::Table(Table::new());
     }
     doc["features"]["image_generation"] = value(true);
+    doc["features"]["enable_request_compression"] = value(false);
     doc["model_provider"] = value(PROVIDER);
     // The top-level selection now applies to the active profile as well.
     if let Some(name) = active_profile {
+        if doc["profiles"][&name].get("features").is_some_and(|f| f.as_table_like().is_none()) {
+            return Err("当前 profile 的 features 格式无效，未修改接入".into());
+        }
         doc["profiles"][&name]
             .as_table_like_mut()
             .ok_or("当前 profile 格式无效")?
             .remove("model_provider");
+        if let Some(features) = doc["profiles"][&name].get_mut("features").and_then(Item::as_table_like_mut) {
+            features.remove("enable_request_compression");
+        }
     }
     if doc.get("model_providers").is_none() {
         doc["model_providers"] = Item::Table(Table::new());
@@ -271,7 +329,10 @@ pub(crate) fn provider_config(base_url: &str, client_key: &str) -> Result<Table>
         return Err("本机接入地址或密钥无效，未修改配置".into());
     }
     let mut p = Table::new();
-    p["name"] = value("Personal Codex Pool");
+    // This is the model vendor's display name. The independent routing id
+    // remains personal_codex_pool so a closed pool cannot route its encrypted
+    // conversations through a different personal OpenAI account.
+    p["name"] = value("OpenAI");
     p["base_url"] = value(base_url);
     p["wire_api"] = value("responses");
     // Keep the desktop's existing ChatGPT identity and its account-targeted UI.
@@ -283,6 +344,9 @@ pub(crate) fn provider_config(base_url: &str, client_key: &str) -> Result<Table>
     p["request_max_retries"] = value(0);
     p["stream_max_retries"] = value(0);
     p["stream_idle_timeout_ms"] = value(600000);
+    let mut capabilities = Table::new();
+    capabilities["remote_compaction"] = value("unsupported");
+    p["capabilities"] = Item::Table(capabilities);
     let mut headers = Table::new();
     headers["x-openai-actor-authorization"] = value("fusion-local");
     headers["x-fusion-client-key"] = value(client_key);
@@ -405,6 +469,8 @@ pub fn apply(store: &Store, path: &Path, exe: &Path, client_key: &str, fingerpri
             applied_profile: None,
             original_image_feature: None,
             applied_image_feature: None,
+            original_compression: None,
+            applied_compression: None,
             previous: None,
         }
     };
@@ -414,17 +480,20 @@ pub fn apply(store: &Store, path: &Path, exe: &Path, client_key: &str, fingerpri
     if b.original_profile.is_none() {
         b.original_profile = Some(profile_selection(&doc));
     }
+    if b.original_compression.is_none() { b.original_compression = Some(compression_fields(&doc)); }
     b.previous = Some(Owned {
         selection: selected(&doc),
         provider: provider(&doc),
         image_feature: image_feature(&doc),
         profile: Some(profile_selection(&doc)),
+        compression: Some(compression_fields(&doc)),
     });
     install(&mut doc, port, client_key)?;
     b.applied_selection = selected(&doc);
     b.applied_provider = provider(&doc);
     b.applied_image_feature = Some(image_feature(&doc));
     b.applied_profile = Some(profile_selection(&doc));
+    b.applied_compression = Some(compression_fields(&doc));
     store.set("codex_config_backup", &serde_json::to_string(&b).map_err(|_| "无法保护接入恢复记录")?)?;
     if let Err(e) = write(path, &source, &doc.to_string()) {
         store.set("codex_config_backup", &old_raw)?;
@@ -447,6 +516,7 @@ fn restored(source: &str, b: &Backup) -> Result<DocumentMut> {
         && b.original_image_feature
             .as_ref()
             .is_none_or(|f| equivalent(&image_feature(&doc), f))
+        && b.original_compression.as_ref().is_none_or(|c| equivalent(&compression_fields(&doc), c))
     {
         // Older Fusion builds removed this table before a failed desktop restart.
         // Rebuild only the definition recorded by our own takeover; no credentials
@@ -506,6 +576,7 @@ fn restored(source: &str, b: &Backup) -> Result<DocumentMut> {
             }
         }
     }
+    if let Some(saved) = &b.original_compression { restore_compression(&mut doc, saved)?; }
     Ok(doc)
 }
 #[cfg(test)]
@@ -526,6 +597,9 @@ mod image_tests {
         apply(&a.store, &path, &exe, &key, &p.fingerprint).unwrap();
         let doc = parse(&read(&path).unwrap()).unwrap();
         let provider = &doc["model_providers"][PROVIDER];
+        assert_eq!(doc["model_provider"].as_str(), Some(PROVIDER));
+        assert_eq!(provider["name"].as_str(), Some("OpenAI"));
+        assert_eq!(provider["capabilities"]["remote_compaction"].as_str(), Some("unsupported"));
         assert_eq!(provider["requires_openai_auth"].as_bool(), Some(true));
         assert!(provider.get("auth").is_none());
         assert_eq!(provider["http_headers"]["x-fusion-client-key"].as_str(), Some(key.as_str()));
@@ -538,6 +612,42 @@ mod image_tests {
         assert_eq!(parse(&read(&path).unwrap()).unwrap()["projects"]["fixture"]["trust_level"].as_str(), Some("trusted"));
         assert_eq!(fs::read_to_string(d.path().join("auth.json")).unwrap(), "public-fixture-login");
         assert!(protected::open("fusion-dpapi-v1:invalid").is_err());
+    }
+    #[test]
+    fn compression_override_restores_original_profile_and_refuses_owned_edits() {
+        let (d, a) = fixture();
+        let path = d.path().join("config.toml");
+        let exe = d.path().join("pool.exe");
+        let source = "model_provider='openai'\nprofile='work'\n[features]\nenable_request_compression=true\nkeep=true\n[profiles.work.features]\nenable_request_compression=true\nother=true\n";
+        fs::write(&path, source).unwrap();
+        let key = a.api_key().unwrap();
+        let p = preview(&a.store, &path, &exe, &key).unwrap();
+        assert!(parse(&p.after).is_ok(), "preview must remain a valid merged fragment");
+        apply(&a.store, &path, &exe, &key, &p.fingerprint).unwrap();
+        let applied = parse(&read(&path).unwrap()).unwrap();
+        assert_eq!(applied["model_provider"].as_str(), Some(PROVIDER));
+        assert_eq!(applied["features"]["enable_request_compression"].as_bool(), Some(false));
+        assert!(applied["profiles"]["work"]["features"].get("enable_request_compression").is_none());
+        for profile in [false, true] {
+            let mut changed = applied.clone();
+            if profile { changed["profiles"]["work"]["features"]["enable_request_compression"] = value(true); }
+            else { changed["features"]["enable_request_compression"] = value(true); }
+            fs::write(&path, changed.to_string()).unwrap();
+            assert!(!is_applied(&a.store, &path).unwrap());
+            assert!(restore_for_close(&a.store, &path, &exe).is_err());
+            assert_eq!(read(&path).unwrap(), changed.to_string());
+        }
+        let mut unrelated = applied;
+        unrelated["features"]["keep"] = value(false);
+        fs::write(&path, unrelated.to_string()).unwrap();
+        restore_for_close(&a.store, &path, &exe).unwrap();
+        verify_closed(&a.store, &path, &exe).unwrap();
+        let restored = parse(&read(&path).unwrap()).unwrap();
+        assert_eq!(restored["model_provider"].as_str(), Some("openai"));
+        assert_eq!(restored["features"]["enable_request_compression"].as_bool(), Some(true));
+        assert_eq!(restored["profiles"]["work"]["features"]["enable_request_compression"].as_bool(), Some(true));
+        assert_eq!(restored["features"]["keep"].as_bool(), Some(false));
+        assert_eq!(restored["profiles"]["work"]["features"]["other"].as_bool(), Some(true));
     }
     #[test]
     fn inline_providers_preserve_custom_profile_and_detect_external_edits() {
@@ -687,6 +797,7 @@ mod image_tests {
             provider: provider(&doc),
             image_feature: image_feature(&doc),
             profile: Some(profile_selection(&doc)),
+            compression: Some(compression_fields(&doc)),
         });
         b.applied_provider = "[provider]\nname='pending-version'".into();
         a.store

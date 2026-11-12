@@ -1,5 +1,19 @@
 # 模块约定
 
+## 2026-11-11 Codex 接入身份、后台额度切换与本机项目
+
+用户本轮明确批准同一个 Codex 本地聊天后台分配额度账号。本节替代旧版“整个聊天永久固定首次账号”的 Codex 规则，不改变 Claude/API 的绑定语义，也不允许执行不明、输出后或工具调用后自动重放。
+
+接入显示名为 OpenAI（模型厂商），底层仍使用 `personal_codex_pool` 独立 provider、个人登录识别、独立本机密钥头及原字段恢复范围。Fusion 首页另行显示实际账号池启停，不将显示名视作官方直连证明。正常恢复仍保留旧 provider 定义，旧池聊天关池后不会自动走原官方账号；有有效恢复记录时，不再以“当前已经脱离”掩盖 owned 字段外改冲突。实际内核实验证明，改用内置 openai 与全局 openai_base_url 会在恢复后把旧池 B 密文送给官方 A，正式 thread/resume 又拒绝改 provider；该不安全接入方案已撤回，不进入交付。
+
+当前 0.167 内核默认对请求压缩，网关接收 JSON 因而须管理 `features.enable_request_compression=false`，同时移除当前 profile 对该字段的覆盖。新增可缺省的主/profile 压缩开关快照仅保存布尔配置，无凭据；旧恢复记录不扩大原管理范围。正常关闭恢复原值，外部改动保持冲突保护。自定义 provider 的 `capabilities.remote_compaction=unsupported` 已由实际内核证明可改走可读本地摘要，避免后续长聊天只剩账号专属 compaction 密文；实际 A→本地压缩 A→耗尽 A→同聊天 B 已验证。它不把已存在且来源不完整的密文历史变成可读全文。
+
+`gateway::portable` 仅在新用户轮次、完整可读消息及已闭合函数/自定义工具调用对可重建时，将聊天绑定作为软偏好；原账号健康时保留，额度/授权/冷却不可用时按既有策略选择备用。实际 Responses Lite 的 additional_tools 声明和 configuration_update reasoning 控制原样保留，控制项不被误判为用户轮次。`Store::switch_chat_bindings` 对 thread/session 哈希做事务 CAS，并保存仅含账号 ID 的切换标记。旧 reasoning 只有在完成安全可读投影时剔除；后续工具请求依据标记移除已知旧账号 reasoning，保留当前账号的 reasoning。未知密文、compaction、服务端引用、远端附件和未完成工具链不会猜测迁移；turn 与所有硬引用绑定仍不可改。
+
+独立 provider 的 request/stream retries 仍设为 0，并由实际内核协议检查验证。`storage::replay_guard` 对具有完整聊天/轮次身份的 Responses/压缩业务，在派发前事务保存操作/身份/完整 JSON 语义的哈希、版本、时间及所有权；对象键顺序不影响去重，不保存正文或凭据。结果不明/成功/输出后不释放；明确未派发或 HTTP 429 拒绝才可释放。七天最多两万条，满容量拒绝新派发，不淘汰尚未到期的不明执行记录。旧无身份接入策略保持；图片继续原生独立 provider 零重试与原账号引用，不用仅有图片轮次的哈希误拦同轮有意的重复生图。
+
+官方桌面 `electron-account-renderer-state-v1` 按登录 owner 切换侧栏 globals/atoms，原生 core 本地项目目录本身可跨临时假登录读取。`src-tauri::local_projects` 只流式投影本机目录/名称/顺序并保存独立目录记忆，不复制账号 atoms、聊天或凭据，不写原生数据库。恢复走正式目录 deep link，仅在已运行、无在途且接入稳定时由用户明确动作触发，逐目录等待 native 状态回执；不会自动启动客户端、抢夺正在进行的任务或静默重发。本机历史启动器只读已有目录页、核验 UUID，再以固定 hostId=local 打开原 thread，不创建、复制或发送聊天。恢复目录、原聊天可见和实际续发分别验收。
+
 ## 2026-11-11 独立 Claude 订阅池与界面修复
 
 用户明确批准 Claude 独立多订阅池。pool-core::claude_pool 使用既有 kv 的独立 v1 目录和会话哈希绑定，Vault 的 claude-pool/ 命名空间保存自主授权令牌，拒绝未来目录版本，无 SQLite schema 迁移。PKCE 回调与待授权状态仅存内存，续期不重放且保留安全收尾。ApiGateway 复用原生 Messages 流观察器、并发和排空，仅订阅模式按会话选定一次账号、重建 OAuth 头；API 来源路径保持。目录/模型查询与 count_tokens 不建立推理会话；工具结果和完整签名必须保留原账号。桌面 claude_commands 仅授权主窗，ApiClients 复用既有受管进程启动/关闭；独立更新和退出检查登录并排空，保持两个池关闭。新版范围覆盖下方旧版“Claude 仅官方登录”描述，不授权厂商混合池。

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 
 export const repository = 'Echolzt17/Fusion';
-export const repositoryDescription = 'Windows 10/11 x64 Codex 本机账号池｜多账号调度、会话固定账号、额度与用量可视化、一键启停及签名更新。含完整开发源码。';
+export const repositoryDescription = 'Windows 10/11 x64 Codex 本机账号池｜额度调度、同聊天可读历史续接、本机项目入口、用量可视化、一键启停及签名更新。含开发源码。';
 const project = fileURLToPath(new URL('../', import.meta.url));
 const releaseRoot = resolve(project, 'target/x86_64-pc-windows-msvc/release');
 export const gates = ['windows10', 'windows11', 'realUpdate', 'accountsAndBindings', 'activeRequestDrain', 'independentRepair', 'fourConversations', 'teamNetwork'];

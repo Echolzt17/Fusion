@@ -24,6 +24,7 @@ const server = createServer(async (req, res) => {
     if (!req.url.startsWith('/v1/')) { req.resume(); res.setHeader('content-type','application/json'); res.end(JSON.stringify({plan_type:'plus',rate_limit:{allowed:true,limit_reached:false}})); return; }
     const chunks = [];
     for await (const b of req) chunks.push(b);
+    assert.equal(req.headers['content-encoding'], undefined, 'the local gateway requires uncompressed JSON');
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : {};
     assert.ok(req.headers['x-fusion-client-key'] === key, 'local fixture header');
     delete req.headers.authorization;
@@ -62,15 +63,16 @@ const server = createServer(async (req, res) => {
 try {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   await writeFile(join(root, 'config.toml'), `model = "gpt-6.1-sol"
-model_provider = "fusion_fixture"
+model_provider = "personal_codex_pool"
 cli_auth_credentials_store = "file"
 chatgpt_base_url = "http://127.0.0.1:${server.address().port}"
 [features]
 image_generation = true
+enable_request_compression = false
 [analytics]
 enabled = false
-[model_providers.fusion_fixture]
-name = "Fusion Fixture"
+[model_providers.personal_codex_pool]
+name = "OpenAI"
 base_url = "${externalGateway || `http://127.0.0.1:${server.address().port}/v1` }"
 wire_api = "responses"
 requires_openai_auth = true
@@ -78,6 +80,8 @@ supports_websockets = false
 request_max_retries = 0
 stream_max_retries = 0
 http_headers = { "x-openai-actor-authorization" = "fusion-local", "x-fusion-client-key" = "fusion-public-fixture-key" }
+[model_providers.personal_codex_pool.capabilities]
+remote_compaction = "unsupported"
 `);
   // Public fake ChatGPT login: the real login and credential store are isolated.
   const claims = {exp:4102444800,sub:'fixture-user',email:'fixture@example.invalid',

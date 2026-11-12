@@ -27,6 +27,7 @@ import { SubscriptionCountdown } from './SubscriptionCountdown';
 import { ErrorReport } from './ErrorReport';
 import { UsageDashboard, type DashboardUsage } from './UsageDashboard';
 import { NetworkCards } from './NetworkCards';
+import { LocalProjectsCard } from './LocalProjectsCard';
 import { PricingCards, usePricing } from './PricingCards';
 import { WorkspaceSwitcher, ApiWorkspace, type ClientId, type WorkspaceView, type ClientStatus } from './ClientWorkspace';
 
@@ -294,6 +295,7 @@ function App() {
         </section>
         <section><div className="section-head"><div><h2>服务设置</h2></div></div><div className="fields"><label>监听端口<input type="number" min="1" max="65535" disabled={connection.mode !== 'off' || busy} value={settings.port} onChange={e => setSettings({ ...settings, port: Number(e.target.value) })} /></label><label>单账号并发<input type="number" min="1" max="16" disabled={connection.mode !== 'off' || busy} value={settings.concurrency} onChange={e => setSettings({ ...settings, concurrency: Number(e.target.value) })} /></label><div className="priority-setting"><span>账号优先规则</span><PrioritySelector value={scheduling.policy} disabled={busy} onChange={changePolicy} /></div></div><button disabled={busy || connection.mode !== 'off'} onClick={() => void run(() => invoke('save_settings', { settings }), '设置已保存')}>保存设置</button></section>
         <PricingCards data={pricing} />
+        <LocalProjectsCard disabled={busy || transitioning || !!shutdown || service.activeRequests > 0} />
         <NetworkCards poolRunning={poolOn} onError={message => notify({ text: message, error: true })} onNotice={message => notify({ text: message, error: false })} />
       </div>}
       {showPool && <ActiveRequests requests={service.requests ?? []} accounts={accounts} onChanged={() => { reader.current!.invalidate(); refresh(); }} />}

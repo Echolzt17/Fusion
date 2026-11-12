@@ -29,6 +29,8 @@ mod transport;
 mod runtime;
 type RequestTracking = Option<axum::Extension<runtime::RequestHandle>>;
 pub(crate) mod continuity;
+mod portable;
+mod replay_guard;
 #[cfg(test)]
 mod image_tests;
 mod images;
@@ -44,6 +46,10 @@ mod connect_tests;
 mod reliability_tests;
 #[cfg(test)]
 mod catalog_tests;
+#[cfg(test)]
+mod rollover_tests;
+#[cfg(test)]
+mod native_rollover_tests;
 
 const MAX_EVENT_BYTES: usize = 64 * 1024 * 1024;
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -215,7 +221,7 @@ impl Gateway {
 fn router(ctx: Context) -> Router {
     Router::new()
         .route("/v1/models", get(models))
-        .route("/v1/responses", post(responses))
+        .route("/v1/responses", post(responses).get(|| async { StatusCode::UPGRADE_REQUIRED }))
         .route("/v1/responses/compact", post(compact))
         .route(
             "/v1/images/generations",
@@ -294,6 +300,11 @@ async fn authorize_before_body(
             "invalid_local_key",
             "本地接入密钥无效",
         );
+    }
+    if req.method() == http::Method::GET && req.uri().path() == "/v1/responses" {
+        // Native WebSocket prewarming is a capability negotiation, not a failed
+        // inference request. 426 asks the native provider to use HTTP SSE.
+        return StatusCode::UPGRADE_REQUIRED.into_response();
     }
     // Existing handlers recheck local authentication. Supply only Fusion's own
     // key after dropping both incoming credential headers above.
@@ -682,6 +693,48 @@ async fn prepare(
     h: &HeaderMap,
     v: &Value,
 ) -> std::result::Result<(Lease, String), Box<Response>> {
+    prepare_routed(a, h, v, None).await
+}
+struct ReplayReservation {
+    ctx: Context,
+    claim: crate::storage::replay_guard::NativeReplayClaim,
+    dispatched: bool,
+}
+impl Drop for ReplayReservation {
+    fn drop(&mut self) {
+        // Cancellation can drop the entire handler while it is still queuing
+        // or authorizing. Such a request has not been sent and remains safe to
+        // try again. Once HTTP dispatch starts, retain the durable guard.
+        if !self.dispatched { let _ = replay_guard::release(&self.ctx, &self.claim); }
+    }
+}
+fn native_claim(a: &mut Audit, h: &HeaderMap, v: &Value)
+    -> std::result::Result<Option<ReplayReservation>, Box<Response>> {
+    let legacy_turn = v["input"].as_array().is_some_and(|input| !input.is_empty())
+        && continuity::identities(h, v).is_ok_and(|keys| {
+            keys.iter().any(|key| key.starts_with("turn:"))
+                && keys.iter().any(|key| key.starts_with("thread:") || key.starts_with("session:"))
+        });
+    if !legacy_turn { return Ok(None); }
+    let claimed = replay_guard::claim_authenticated(&a.ctx, h, v, &a.operation);
+    match claimed {
+        Ok(claim) => Ok(Some(ReplayReservation { ctx: a.ctx.clone(), claim, dispatched: false })),
+        Err(message) => Err(Box::new(a.error(StatusCode::BAD_REQUEST, "native_replay_blocked", &message))),
+    }
+}
+fn release_claim(ctx: &Context, claim: Option<&ReplayReservation>) {
+    if let Some(claim) = claim { let _ = replay_guard::release(ctx, &claim.claim); }
+}
+struct ChatRouting {
+    keys: Vec<String>,
+    preferred: Option<String>,
+}
+async fn prepare_routed(
+    a: &mut Audit,
+    h: &HeaderMap,
+    v: &Value,
+    routing: Option<&ChatRouting>,
+) -> std::result::Result<(Lease, String), Box<Response>> {
     if !authorized(&a.ctx, h) {
         return Err(Box::new(a.error(
             StatusCode::UNAUTHORIZED,
@@ -700,7 +753,11 @@ async fn prepare(
             id: a.id.clone(), conversation_key: a.conversation_key.clone(), started_at: a.started_at, account: None,
         });
     }
-    let pin = match pinned(&a.ctx, h, v) {
+    let pin = match routing {
+        Some(route) => Ok(route.preferred.clone()),
+        None => pinned(&a.ctx, h, v),
+    };
+    let pin = match pin {
         Ok(p) => p,
         Err(e) => {
             return Err(Box::new(a.error(
@@ -720,6 +777,12 @@ async fn prepare(
     let acquire = async {
         if a.operation == "models" {
             scheduler.acquire_catalog(pin.as_deref()).await
+        } else if routing.is_some() {
+            scheduler.acquire_portable_observed(pin.as_deref(), image, move |phase| {
+                if let Some(request) = &tracking {
+                    request.phase(match phase { QueuePhase::Capacity => "queued", QueuePhase::Cooldown => "cooldown" });
+                }
+            }).await
         } else {
             scheduler.acquire_observed(pin.as_deref(), image, move |phase| {
                 if let Some(request) = &tracking {
@@ -769,7 +832,14 @@ async fn prepare(
             )))
         }
     };
-    if let Err(e) = a.ctx.accounts.store.bind_many(&keys, &lease.account.id) {
+    let bound = if let Some(route) = routing {
+        match route.preferred.as_deref() {
+            Some(previous) if previous != lease.account.id =>
+                a.ctx.accounts.store.switch_chat_bindings(&route.keys, previous, &lease.account.id),
+            _ => a.ctx.accounts.store.bind_many(&route.keys, &lease.account.id),
+        }
+    } else { a.ctx.accounts.store.bind_many(&keys, &lease.account.id) };
+    if let Err(e) = bound {
         return Err(Box::new(a.error(
             StatusCode::CONFLICT,
             "continuity_unavailable",
@@ -777,6 +847,41 @@ async fn prepare(
         )));
     }
     Ok((lease, token))
+}
+async fn prepare_response(
+    a: &mut Audit, h: &mut HeaderMap, v: &mut Value,
+) -> std::result::Result<(Lease, String), Box<Response>> {
+    if let Err(e) = portable::sanitize_rolled_history(&a.ctx, h, v) {
+        return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e)));
+    }
+    // Only a complete new user turn can use a soft chat preference. A tool
+    // continuation, image turn, compacted history or server reference keeps its
+    // original hard affinity. Unknown input is never made portable by guessing.
+    let projection = portable::project(v);
+    let identities = continuity::identities(h, v);
+    let can_switch = projection.is_some() && identities.as_ref().is_ok_and(|ids| {
+        ids.iter().filter(|key| key.starts_with("turn:")).all(|key|
+            a.ctx.accounts.store.binding(key).is_ok_and(|account| account.is_none()))
+    });
+    if !can_switch { return prepare(a, h, v).await; }
+    let (keys, preferred) = match portable::chat_preference(&a.ctx, h, v) {
+        Ok(state) => state,
+        Err(e) => return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e))),
+    };
+    if keys.is_empty() { return prepare(a, h, v).await; }
+    let route = ChatRouting { keys, preferred };
+    let result = prepare_routed(a, h, v, Some(&route)).await?;
+    let account = &result.0.account.id;
+    let foreign_state = continuity::required(h, v).iter().any(|key|
+        !a.ctx.accounts.store.binding(key).is_ok_and(|bound| bound.as_deref() == Some(account.as_str())));
+    if route.preferred.as_deref().is_some_and(|old| old != account) || foreign_state {
+        *v = projection.expect("portable projection was checked");
+        h.remove("x-codex-turn-state");
+    }
+    // A turn becomes hard-bound only after an upstream response is accepted.
+    // A known HTTP quota refusal has not executed this turn and may use a new
+    // account on the next safe attempt; ambiguous sends are guarded separately.
+    Ok(result)
 }
 async fn rejected(a: &mut Audit, lease: &Lease, r: reqwest::Response) -> Response {
     a.received(&r);
@@ -920,11 +1025,16 @@ async fn catalog_inner(a: &mut Audit, h: &HeaderMap, version: Option<String>) ->
     a.success();
     Json(json!({"object":"list","data":data,"models":items})).into_response()
 }
-async fn compact(State(ctx): State<Context>, h: HeaderMap, tracking: RequestTracking, Json(v): Json<Value>) -> Response {
+async fn compact(State(ctx): State<Context>, mut h: HeaderMap, tracking: RequestTracking, Json(mut v): Json<Value>) -> Response {
     let mut a = Audit::tracked(ctx, "compact", tracking);
+    let mut replay = match native_claim(&mut a, &h, &v) { Ok(claim) => claim, Err(response) => return *response };
+    if let Err(e) = portable::sanitize_rolled_history(&a.ctx, &mut h, &mut v) {
+        release_claim(&a.ctx, replay.as_ref());
+        return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
+    }
     let (lease, t) = match prepare(&mut a, &h, &v).await {
         Ok(v) => v,
-        Err(r) => return *r,
+        Err(r) => { release_claim(&a.ctx, replay.as_ref()); return *r; },
     };
     let r = match request(
         &mut a,
@@ -939,12 +1049,14 @@ async fn compact(State(ctx): State<Context>, h: HeaderMap, tracking: RequestTrac
     };
     drop(v);
     a.phase("catalog_headers");
+    if let Some(claim) = replay.as_mut() { claim.dispatched = true; }
     let r = match a.send(r, Duration::from_secs(180)).await {
         Ok(r) => r,
         Err(e) => return a.network_error(e),
     };
     a.received(&r);
     if !r.status().is_success() {
+        if r.status() == StatusCode::TOO_MANY_REQUESTS { release_claim(&a.ctx, replay.as_ref()); }
         return rejected(&mut a, &lease, r).await;
     }
     let b = match a.read_response(r, 32 * 1024 * 1024, Duration::from_secs(180)).await {
@@ -1102,7 +1214,7 @@ async fn observe_failure(a: &mut Audit, obs: &Observer) {
         }
     }
 }
-async fn responses(State(ctx): State<Context>, h: HeaderMap, tracking: RequestTracking, Json(mut v): Json<Value>) -> Response {
+async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: RequestTracking, Json(mut v): Json<Value>) -> Response {
     let mut a = Audit::tracked(ctx, "responses", tracking);
     if !v.is_object() {
         return a.error(
@@ -1111,10 +1223,11 @@ async fn responses(State(ctx): State<Context>, h: HeaderMap, tracking: RequestTr
             "请求必须是 JSON 对象",
         );
     }
+    let mut replay = match native_claim(&mut a, &h, &v) { Ok(claim) => claim, Err(response) => return *response };
     let stream = v["stream"].as_bool().unwrap_or(false);
-    let (lease, t) = match prepare(&mut a, &h, &v).await {
+    let (mut lease, mut t) = match prepare_response(&mut a, &mut h, &mut v).await {
         Ok(v) => v,
-        Err(r) => return *r,
+        Err(r) => { release_claim(&a.ctx, replay.as_ref()); return *r; },
     };
     v["stream"] = json!(true);
     v["store"] = json!(false);
@@ -1124,19 +1237,56 @@ async fn responses(State(ctx): State<Context>, h: HeaderMap, tracking: RequestTr
     if let Some(text) = v["input"].as_str() {
         v["input"] = json!([{"role":"user","content":[{"type":"input_text","text":text}]}]);
     }
-    let r = match request(&mut a, &lease, &t, &h, reqwest::Method::POST, "/responses").await {
-        Ok(r) => r.header("accept", "text/event-stream").json(&v),
-        Err(e) => return a.network_error(e),
+    let turn_keys = continuity::identities(&h, &v).unwrap_or_default().into_iter()
+        .filter(|key| key.starts_with("turn:")).collect::<Vec<_>>();
+    let portable_attempt = portable::project(&v).is_some()
+        && turn_keys.iter().all(|key| a.ctx.accounts.store.binding(key).is_ok_and(|owner| owner.is_none()));
+    let max_accounts = a.ctx.accounts.store.accounts().map(|accounts| accounts.len().min(8)).unwrap_or(1);
+    let mut tried = std::collections::HashSet::new();
+    let r = loop {
+        tried.insert(lease.account.id.clone());
+        let r = match request(&mut a, &lease, &t, &h, reqwest::Method::POST, "/responses").await {
+            Ok(r) => r.header("accept", "text/event-stream").json(&v),
+            Err(e) => return a.network_error(e),
+        };
+        a.phase("catalog_headers");
+        if let Some(claim) = replay.as_mut() { claim.dispatched = true; }
+        let r = match a.send(r, Duration::from_secs(180)).await {
+            Ok(r) => r,
+            Err(e) => return a.network_error(e),
+        };
+        // HTTP 429 is an explicit refusal before output. Unlike a broken
+        // connection, 5xx or failed SSE, it cannot have executed model tools.
+        if r.status() != StatusCode::TOO_MANY_REQUESTS || !portable_attempt || tried.len() >= max_accounts {
+            break r;
+        }
+        let delay = r.headers().get("retry-after").and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<i64>().ok()).unwrap_or(60).clamp(1, 86400 * 7);
+        let _ = a.ctx.accounts.mark_failure(&lease.account.id, 429, delay).await;
+        let alternative = a.ctx.accounts.store.accounts().is_ok_and(|accounts| accounts.iter()
+            .any(|account| !tried.contains(&account.id) && a.ctx.scheduler.available(account)));
+        if !alternative { break r; }
+        drop(r);
+        drop(lease);
+        a.route_lease = None;
+        let next = match prepare_response(&mut a, &mut h, &mut v).await {
+            Ok(next) => next,
+            Err(response) => { release_claim(&a.ctx, replay.as_ref()); return *response; },
+        };
+        lease = next.0;
+        t = next.1;
+        if tried.contains(&lease.account.id) {
+            return a.error(StatusCode::SERVICE_UNAVAILABLE, "account_unavailable", "备用账号当前不可用，未重复发送已尝试的账号");
+        }
     };
     drop(v);
-    a.phase("catalog_headers");
-    let r = match a.send(r, Duration::from_secs(180)).await {
-        Ok(r) => r,
-        Err(e) => return a.network_error(e),
-    };
     a.received(&r);
     if !r.status().is_success() {
+        if r.status() == StatusCode::TOO_MANY_REQUESTS { release_claim(&a.ctx, replay.as_ref()); }
         return rejected(&mut a, &lease, r).await;
+    }
+    if let Err(e) = a.ctx.accounts.store.bind_many(&turn_keys, &lease.account.id) {
+        return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
     }
     let turn_state = r.headers().get("x-codex-turn-state").cloned();
     // The official client parses SSE bytes even when the backend omits/mislabels

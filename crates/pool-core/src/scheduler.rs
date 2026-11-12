@@ -16,6 +16,11 @@ pub enum QueuePhase {
     Capacity,
     Cooldown,
 }
+#[derive(Clone, Copy)]
+enum Affinity<'a> {
+    Pinned(Option<&'a str>),
+    Portable(Option<&'a str>),
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionPolicy {
@@ -280,6 +285,19 @@ impl Scheduler {
         self.acquire_kind_observed(pinned, REQUEST_QUEUE_WAIT, image, true, progress)
             .await
     }
+    /// The caller has verified a complete portable input. Preserve its chat
+    /// preference while healthy, including when busy; choose a backup only
+    /// after that account becomes unavailable, never for hard references.
+    pub async fn acquire_portable_observed(
+        self: &Arc<Self>,
+        preferred: Option<&str>,
+        image: bool,
+        progress: impl Fn(QueuePhase) + Send + Sync,
+    ) -> Result<Lease> {
+        self.acquire_affinity_observed(
+            Affinity::Portable(preferred), REQUEST_QUEUE_WAIT, image, true, progress,
+        ).await
+    }
     async fn acquire_wait(self: &Arc<Self>, pinned: Option<&str>, wait: Duration) -> Result<Lease> {
         self.acquire_kind(pinned, wait, false).await
     }
@@ -300,6 +318,20 @@ impl Scheduler {
         allow_cooldown: bool,
         progress: impl Fn(QueuePhase) + Send + Sync,
     ) -> Result<Lease> {
+        self.acquire_affinity_observed(
+            Affinity::Pinned(pinned), wait, image, allow_cooldown, progress,
+        ).await
+    }
+    async fn acquire_affinity_observed(
+        self: &Arc<Self>,
+        affinity: Affinity<'_>,
+        wait: Duration,
+        image: bool,
+        allow_cooldown: bool,
+        progress: impl Fn(QueuePhase) + Send + Sync,
+    ) -> Result<Lease> {
+        let pinned = match affinity { Affinity::Pinned(id) => id, Affinity::Portable(_) => None };
+        let portable_preference = match affinity { Affinity::Portable(id) => id, Affinity::Pinned(_) => None };
         let started = tokio::time::Instant::now();
         let deadline = started + wait;
         let fallback_at = started + wait.min(PREFERENCE_WAIT);
@@ -353,8 +385,11 @@ impl Scheduler {
                     candidates.sort_by(|a, b| compare(a, b, settings.selection_policy, &state));
                     let persisted = self.store.get(CURRENT)?;
                     let current = persisted.clone().or(settings.fixed_account);
+                    let portable_index = portable_preference
+                        .and_then(|id| candidates.iter().position(|a| a.id == id));
                     let mut index = pinned
                         .and_then(|id| candidates.iter().position(|a| a.id == id))
+                        .or(portable_index)
                         .or_else(|| {
                             current
                                 .as_ref()
@@ -370,6 +405,7 @@ impl Scheduler {
                     if full(&candidates[index])
                         && tokio::time::Instant::now() >= fallback_at
                         && pinned.is_none()
+                        && portable_index.is_none()
                     {
                         if let Some(other) = candidates.iter().position(|a| !full(a)) {
                             index = other;

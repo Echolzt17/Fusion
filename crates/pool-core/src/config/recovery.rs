@@ -139,10 +139,12 @@ fn scope(doc: &DocumentMut) -> String {
     serde_json::json!([
         v["model_provider"],
         v["features"]["image_generation"],
+        v["features"]["enable_request_compression"],
         v["model_providers"][PROVIDER],
         v["profile"],
         active.map(|p| &p["model_provider"]),
         active.map(|p| &p["openai_base_url"]),
+        active.map(|p| &p["features"]["enable_request_compression"]),
         v["openai_base_url"],
         v["model_providers"]["openai"]
     ])
@@ -249,7 +251,9 @@ pub fn recovery_preview(
         .filter(|d| detached_doc(d, exe, port(store)).unwrap_or(false))
         .or_else(|| {
             doc.as_ref()
-                .filter(|d| store.is_some() && detached_doc(d, exe, port(store)).unwrap_or(false))
+                // An external edit that happens to detach the route does not
+                // complete a recorded normal restore or retire its origin.
+                .filter(|d| b.is_none() && store.is_some() && detached_doc(d, exe, port(store)).unwrap_or(false))
                 .cloned()
         });
     let pending = journal(path).ok().flatten().is_some() && (!path.exists() || source == MINIMAL);
@@ -513,6 +517,25 @@ fn rename_new(source: &Path, target: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::tests::fixture;
+    #[test]
+    fn external_detachment_does_not_retire_a_conflicting_recorded_origin() {
+        let (d, a) = fixture();
+        let path = d.path().join("config.toml");
+        let exe = d.path().join("pool.exe");
+        fs::write(&path, "model_provider='openai'\n").unwrap();
+        let key = a.api_key().unwrap();
+        let p = preview(&a.store, &path, &exe, &key).unwrap();
+        apply(&a.store, &path, &exe, &key, &p.fingerprint).unwrap();
+        let original_backup = a.store.get("codex_config_backup").unwrap();
+        let mut external = parse(&read(&path).unwrap()).unwrap();
+        external["model_provider"] = value("external-provider");
+        let changed = external.to_string();
+        fs::write(&path, &changed).unwrap();
+        assert!(detached(&path, &exe, 18765).unwrap());
+        assert!(restore_for_close(&a.store, &path, &exe).is_err());
+        assert_eq!(read(&path).unwrap(), changed);
+        assert_eq!(a.store.get("codex_config_backup").unwrap(), original_backup);
+    }
     #[test]
     fn normal_close_merges_unrelated_edits_but_never_accepts_changed_owned_fields() {
         let (d, a) = fixture();
