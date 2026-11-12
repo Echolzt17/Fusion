@@ -8,7 +8,7 @@ use std::{
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 const LABEL: &str = "pool-widget";
-const CAPSULE_WIDTH: f64 = 340.;
+const CAPSULE_WIDTH: f64 = 416.;
 const CAPSULE_HEIGHT: f64 = 40.;
 const PANEL_WIDTH: f64 = 416.;
 const PANEL_HEIGHT: f64 = 520.;
@@ -533,18 +533,56 @@ fn open_console(app: &tauri::AppHandle) -> Result<()> {
     app.emit_to("main", "widget-open-console", ())
         .map_err(|_| "无法打开账号控制台".into())
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaWindow {
+    remaining: Option<f64>,
+    reset_at: Option<i64>,
+    window_seconds: Option<i64>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaSnapshot {
+    updated_at: Option<i64>,
+    state: &'static str,
+    primary_window: QuotaWindow,
+    secondary_window: QuotaWindow,
+}
+fn quota_snapshot(account: &pool_core::Account, now: i64) -> QuotaSnapshot {
+    let quota = account.quota.as_ref();
+    let updated_at = quota.and_then(|q| q["updatedAt"].as_i64()).filter(|at| *at > 0);
+    let fresh = updated_at.and_then(|at| now.checked_sub(at))
+        .is_some_and(|age| (0..=pool_core::account::QUOTA_REFRESH_INTERVAL_SECS).contains(&age));
+    let reset = quota.is_some_and(|q| ["primary_window", "secondary_window"].iter().any(|key| {
+        q["rateLimit"][key]["reset_at"].as_i64().is_some_and(|at| at > 0 && at <= now)
+    }));
+    let state = if account.quota_error.is_some() { "query_failed" }
+        else if quota.is_none() || updated_at.is_none() { "unknown" }
+        else if !fresh || reset { "stale" } else { "valid" };
+    let window = |key: &str| {
+        let value = quota.map(|q| &q["rateLimit"][key]);
+        QuotaWindow {
+            remaining: (state == "valid").then(|| value.and_then(|q| q["used_percent"].as_f64())
+                .filter(|used| used.is_finite()).map(|used| (100. - used).clamp(0., 100.))).flatten(),
+            reset_at: value.and_then(|q| q["reset_at"].as_i64()).filter(|at| *at > 0),
+            window_seconds: value.and_then(|q| q["limit_window_seconds"].as_i64()).filter(|seconds| *seconds > 0),
+        }
+    };
+    QuotaSnapshot { updated_at, state, primary_window: window("primary_window"), secondary_window: window("secondary_window") }
+}
 fn quota_remaining(account: &pool_core::Account, now: i64) -> Option<f64> {
-    if account.quota_error.is_some() { return None; }
-    let quota = account.quota.as_ref()?;
-    let age = now.checked_sub(quota["updatedAt"].as_i64()?)?;
-    if !(0..=pool_core::account::QUOTA_REFRESH_INTERVAL_SECS).contains(&age) { return None; }
-    if ["primary_window", "secondary_window"].iter().any(|key| {
-        quota["rateLimit"][key]["reset_at"].as_i64().is_some_and(|reset| reset <= now)
-    }) { return None; }
-    ["primary_window", "secondary_window"].iter()
-        .filter_map(|key| quota["rateLimit"][key]["used_percent"].as_f64())
-        .filter(|used| used.is_finite())
-        .map(|used| (100. - used).clamp(0., 100.)).reduce(f64::min)
+    let quota = quota_snapshot(account, now);
+    [quota.primary_window.remaining, quota.secondary_window.remaining].into_iter().flatten().reduce(f64::min)
+}
+fn chosen_account<'a>(accounts: &'a [pool_core::Account], recent: Option<&pool_core::storage::history::RecentRequest>,
+    scheduling: &pool_core::scheduler::SchedulingStatus) -> (Option<&'a pool_core::Account>, &'static str) {
+    let (id, source) = match recent {
+        Some(request) => (request.account.as_ref(), "recent_request"),
+        None => (scheduling.preferred_account_id.as_ref().or(scheduling.current_account_id.as_ref()), "preferred"),
+    };
+    let account = accounts.iter().find(|a| Some(&a.id) == id);
+    let source = if account.is_some() { source } else if recent.is_some() && id.is_none() { "unassigned" } else { "unavailable" };
+    (account, source)
 }
 #[tauri::command]
 pub async fn widget_snapshot(a: tauri::State<'_, App>, app: tauri::AppHandle, details: bool) -> Result<serde_json::Value> {
@@ -566,13 +604,15 @@ pub async fn widget_snapshot(a: tauri::State<'_, App>, app: tauri::AppHandle, de
             Some(request) => request.conversation_key.clone(),
             None => store.conversation(None)?.map(|c| c.conversation_key),
         };
-        let current = match &recent {
-            Some(request) => request.account.as_ref(),
-            None => scheduling.current_account_id.as_ref().or(scheduling.preferred_account_id.as_ref()),
-        };
-        let chosen = accounts.iter().find(|account| Some(&account.id) == current);
+        let (chosen, account_source) = chosen_account(&accounts, recent.as_ref(), &scheduling);
         let now = pool_core::now();
         let remaining = chosen.and_then(|account| quota_remaining(account, now));
+        let plan = chosen.map(|account| {
+            let fallback = store.get(&format!("account-plan/v1/{}", account.id))?.unwrap_or_default();
+            Ok::<_, String>(if pool_core::subscription::code(account).is_empty() {
+                pool_core::subscription::label_code(&fallback)
+            } else { pool_core::subscription::label(account) })
+        }).transpose()?;
         let quotas: Vec<f64> = accounts.iter().filter_map(|account| quota_remaining(account, now)).collect();
         let (all, current_summary) = store.request_summaries(conversation.as_deref())?;
         let mut out = serde_json::json!({"control":control,"on":true,"remaining":remaining,"conversationKey":conversation,
@@ -580,7 +620,9 @@ pub async fn widget_snapshot(a: tauri::State<'_, App>, app: tauri::AppHandle, de
             "quotaAccounts":quotas.len(),"totalAccounts":accounts.len(),
             "tokens":if all.measured_requests > 0 { Some(all.total_tokens) } else { None },
             "usagePartial":all.measured_requests < all.requests || all.history_partial,
-            "currentAccountLabel":chosen.map(|c|format!("账号 {}",accounts.iter().position(|a|a.id==c.id).unwrap_or(0)+1)),
+            "currentAccountLabel":chosen.map(|c|format!("账号{}",accounts.iter().position(|a|a.id==c.id).unwrap_or(0)+1)),
+            "currentAccountSource":account_source,"currentPlanLabel":plan,
+            "currentQuota":chosen.map(|account|quota_snapshot(account,now)),
             "storageWarning":store.persistence_warning()});
         if details {
             let business = |operation: &str| matches!(operation, "responses" | "compact" | "image_generate" | "image_edit");
@@ -617,13 +659,52 @@ mod tests {
         assert_eq!(quota_remaining(&account, 1100), None);
     }
     #[test]
+    fn account_source_never_guesses_the_account_for_an_unassigned_or_removed_request() {
+        let account = pool_core::Account { id:"preferred".into(),email:"fixture@example.test".into(),account_id:"fixture".into(),state:"ready".into(),cooldown_until:0,quota:None,quota_error:None };
+        let accounts = vec![account];
+        let scheduling = pool_core::scheduler::SchedulingStatus { policy:Default::default(),preferred_account_id:Some("preferred".into()),current_account_id:Some("previous".into()) };
+        let (chosen, source) = chosen_account(&accounts,None,&scheduling);
+        assert_eq!(chosen.unwrap().id,"preferred");
+        assert_eq!(source,"preferred");
+        let mut recent = pool_core::storage::history::RecentRequest { id:"request".into(),conversation_key:None,started_at:1000,account:None };
+        let (chosen, source) = chosen_account(&accounts,Some(&recent),&scheduling);
+        assert!(chosen.is_none());assert_eq!(source,"unassigned");
+        recent.account=Some("removed".into());
+        let (chosen, source) = chosen_account(&accounts,Some(&recent),&scheduling);
+        assert!(chosen.is_none());assert_eq!(source,"unavailable");
+        recent.account=Some("preferred".into());
+        let (chosen, source) = chosen_account(&accounts,Some(&recent),&scheduling);
+        assert_eq!(chosen.unwrap().id,"preferred");assert_eq!(source,"recent_request");
+    }
+    #[test]
+    fn quota_details_are_a_numeric_projection_and_keep_expired_values_unknown() {
+        let mut account = pool_core::Account { id:"fixture".into(),email:"fixture@example.test".into(),account_id:"fixture".into(),state:"ready".into(),cooldown_until:0,quota_error:None,
+            quota:Some(serde_json::json!({"updatedAt":1000,"unapproved":"fixture-private-value","rateLimit":{
+                "primary_window":{"used_percent":22,"reset_at":2000,"limit_window_seconds":18000},
+                "secondary_window":{"used_percent":17,"reset_at":3000,"limit_window_seconds":604800}}})) };
+        let value=serde_json::to_value(quota_snapshot(&account,1100)).unwrap();
+        assert_eq!(value["primaryWindow"]["remaining"],78.);
+        assert_eq!(value["secondaryWindow"]["remaining"],83.);
+        assert_eq!(value["primaryWindow"]["windowSeconds"],18000);
+        assert_eq!(value["updatedAt"],1000);
+        assert!(!value.to_string().contains("unapproved"));
+        assert!(!value.to_string().contains("fixture-private-value"));
+        let value=serde_json::to_value(quota_snapshot(&account,1700)).unwrap();
+        assert_eq!(value["state"],"stale");
+        assert!(value["primaryWindow"]["remaining"].is_null());
+        account.quota_error=Some("fixture failure".into());
+        let value=serde_json::to_value(quota_snapshot(&account,1100)).unwrap();
+        assert_eq!(value["state"],"query_failed");
+        assert!(value["secondaryWindow"]["remaining"].is_null());
+    }
+    #[test]
     fn widget_dimensions_keep_the_capsule_anchor_when_expanding() {
         let anchor = Anchor { x: 600, y: 700 };
         let (a, w, h, x, y) = geometry(anchor, (0, 0, 1200, 900), 1., false);
-        assert_eq!((w, h, x, y), (340, 40, 600, 700));
+        assert_eq!((w, h, x, y), (416, 40, 600, 700));
         let (_, w, h, x, y) = geometry(a, (0, 0, 1200, 900), 1., true);
-        assert_eq!((w, h, x, y), (416, 520, 524, 220));
-        assert_eq!((x + w as i32, y + h as i32), (940, 740));
+        assert_eq!((w, h, x, y), (416, 520, 600, 220));
+        assert_eq!((x + w as i32, y + h as i32), (1016, 740));
     }
     #[test]
     fn anchor_preserves_logical_position_when_moving_between_dpi_scales() {

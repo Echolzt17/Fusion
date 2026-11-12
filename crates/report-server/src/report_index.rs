@@ -67,7 +67,8 @@ mod tests {
         for id in ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"] {
             r.report_id = id.into(); store.ingest(&r, at).unwrap();
         }
-        assert!(store.events(0).unwrap().is_empty());
+        assert_eq!(store.events(0).unwrap().len(), 1);
+        assert_eq!(store.events(0).unwrap()[0]["kind"], "new_errors");
         // Emulate old cached version; summaries must still use original null.
         store.db.execute("UPDATE errors SET version='0.1.34'", []).unwrap();
         assert_eq!(store.groups(at-1, at, false).unwrap()[0]["versions"], "unknown");

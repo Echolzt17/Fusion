@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Fusion",
-  "version": "1.0.13",
+  "version": "1.0.14-rc.1",
   "identifier": "local.timothy.codexpool",
   "build": {
     "beforeDevCommand": "npm run web:dev",

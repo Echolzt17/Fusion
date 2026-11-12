@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { WidgetSummary, type WidgetDetails } from './WidgetSummary';
+import { WidgetSummary, type WidgetAccount, type WidgetDetails } from './WidgetSummary';
 import './widget.css';
 
 type Control = { instance: string; revision: number; expanded: boolean; ready: boolean };
@@ -11,6 +11,7 @@ type Snapshot = {
   on: boolean; storageWarning?: string | null; remaining?: number | null;
   totalRemaining?: number | null; quotaAccounts?: number; totalAccounts?: number;
   tokens?: number | null; usagePartial?: boolean; currentAccountLabel?: string | null;
+  currentAccountSource?: WidgetAccount['source']; currentPlanLabel?: string | null; currentQuota?: WidgetAccount['quota'];
   conversationKey?: string | null; details?: WidgetDetails;
 };
 const compact = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
@@ -159,7 +160,9 @@ export function PoolWidget() {
   const quotaPartial = (snapshot.quotaAccounts ?? 0) < (snapshot.totalAccounts ?? 0);
   const poolQuota = snapshot.totalRemaining == null ? '—' : `${Math.round(snapshot.totalRemaining)}%${quotaPartial ? '*' : ''}`;
   const tokens = snapshot.tokens == null ? '—' : compact(snapshot.tokens) + (snapshot.usagePartial ? '*' : '');
-  const quotaTitle = `总余为 ${snapshot.quotaAccounts ?? 0}/${snapshot.totalAccounts ?? 0} 个账号的有效额度快照之和；过期、查询失败或缺失不按零计算。不同套餐的百分比不代表相同 Token 余额。`;
+  const quotaTitle = `合计为 ${snapshot.quotaAccounts ?? 0}/${snapshot.totalAccounts ?? 0} 个账号的有效剩余百分比之和；过期、查询失败或缺失不按零计算。不同套餐的百分比不代表相同 Token 余额。`;
+  const account = { label: snapshot.currentAccountLabel, plan: snapshot.currentPlanLabel, source: snapshot.currentAccountSource, quota: snapshot.currentQuota };
+  const identity = snapshot.currentAccountLabel ? `${snapshot.currentAccountSource === 'preferred' ? '首选·' : ''}${snapshot.currentAccountLabel} ${snapshot.currentPlanLabel || '套餐未知'}` : snapshot.currentAccountSource === 'unassigned' ? '待分配账号' : '账号归属未知';
   const warning = error || snapshot.storageWarning;
   return <div ref={root} className="widget-root" onMouseDownCapture={e => {
     // This read-only surface must not move the DOM caret away from Codex.
@@ -167,7 +170,7 @@ export function PoolWidget() {
     if (e.button === 0 && e.target instanceof Element && e.target.closest('button')) e.preventDefault();
   }}>
     <section className={'widget-panel' + (open ? ' is-open' : '')} inert={!open} aria-hidden={!open} aria-label="账号池详情面板">
-      <WidgetSummary details={snapshot.details} scope={scope} onScopeChange={setScope} warning={warning}
+      <WidgetSummary details={snapshot.details} account={account} scope={scope} onScopeChange={setScope} warning={warning}
         onOpenConsole={() => action(invoke('widget_open_console', { instance: control.current?.instance }))} />
     </section>
     <div ref={capsule} className={'widget-capsule' + (hovered ? ' is-hovered' : '') + (open ? ' is-expanded' : '') + (warning ? ' has-error' : '')} aria-label="账号池小胶囊"
@@ -179,11 +182,11 @@ export function PoolWidget() {
       }}><i /><i /><i /><i /><i /><i /></span>
       <button aria-label="展开或收起账号池详情" aria-expanded={open}
         onMouseDown={e => e.preventDefault()}
-        title={warning || `${snapshot.currentAccountLabel || '待分配账号'} · 当前余 ${quota}。${quotaTitle}累计 ${snapshot.tokens?.toLocaleString('zh-CN') ?? '未知'} Token${snapshot.usagePartial ? '，仅含已上报用量，历史覆盖可能不完整' : ''}`}
+        title={warning || `${snapshot.currentAccountSource === 'recent_request' ? '最近实际请求' : '尚无实际请求确认'}：${identity} · 剩余 ${quota}。${quotaTitle}累计 ${snapshot.tokens?.toLocaleString('zh-CN') ?? '未知'} Token${snapshot.usagePartial ? '，仅含已上报用量，历史覆盖可能不完整' : ''}`}
         onClick={() => action(expand(!desired.current))}>
-        <span>当前余 <b>{quota}</b></span><span className="widget-divider" />
-        <span title={quotaTitle}>总余 <b>{poolQuota}</b></span><span className="widget-divider" />
-        <span>Token <b>{tokens}</b></span>
+        <span className="widget-account-quota"><span className="widget-account-identity">池·{identity}</span><span>·余<b>{quota}</b></span></span><span className="widget-divider" />
+        <span className="widget-metric" title={quotaTitle}>合计 <b>{poolQuota}</b></span><span className="widget-divider" />
+        <span className="widget-metric">Token <b>{tokens}</b></span>
         <span className="widget-arrow" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 15V5m-4 4 4-4 4 4" /></svg></span>
       </button>
     </div>

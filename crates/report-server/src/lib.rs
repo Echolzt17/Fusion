@@ -10,6 +10,8 @@ use subtle::ConstantTimeEq;
 use axum::Extension;
 mod report_index;
 mod reliability;
+mod known;
+mod new_events;
 pub fn now() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 }
 type Result<T> = std::result::Result<T, &'static str>;
 pub struct Store { db: Connection, root: PathBuf, max_bytes: u64 }
@@ -17,7 +19,7 @@ impl Store {
     pub fn open(root: &FsPath, max_bytes: u64) -> Result<Self> {
         std::fs::create_dir_all(root).map_err(|_| "data_directory_failed")?;
         let path = root.join("reports.sqlite");
-        let db = Connection::open(&path).map_err(|_| "database_open_failed")?;
+        let mut db = Connection::open(&path).map_err(|_| "database_open_failed")?;
         let v: u32 = db.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|_| "database_version_failed")?;
         if v > 1 { return Err("database_newer_than_server"); }
         db.busy_timeout(std::time::Duration::from_secs(5)).map_err(|_| "database_config_failed")?;
@@ -40,6 +42,7 @@ impl Store {
                 PRAGMA user_version=1; COMMIT;").map_err(|_| "database_init_failed")?;
         }
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA journal_size_limit=16777216;").map_err(|_| "database_config_failed")?;
+        new_events::initialize(&mut db, now())?;
         let size: u64 = db.query_row("PRAGMA page_size", [], |r| r.get(0)).map_err(|_| "database_config_failed")?;
         db.pragma_update(None, "max_page_count", (max_bytes / size).max(32)).map_err(|_| "database_config_failed")?;
         Ok(Self { db, root: root.into(), max_bytes })
@@ -57,12 +60,20 @@ impl Store {
         if used.saturating_add(canonical.len() as u64 * 3) > self.max_bytes { return Err("storage_limit"); }
         let tx = self.db.transaction().map_err(|_| "database_write_failed")?;
         let mut accepted = 0;
+        let mut new_errors = Vec::new();
         for error in &report.errors {
             let record = serde_json::to_string(error).map_err(|_| "invalid_report")?;
-            accepted += tx.execute("INSERT OR IGNORE INTO errors VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![report.installation_id,error.request_id,error.signature(),if report.prepared_at>at+300 || error.at>at+300 {0} else {error.at},at,error.app_version.as_deref().unwrap_or("unknown"),record,report.report_id]).map_err(|_| "database_write_failed")?;
+            let inserted = tx.execute("INSERT OR IGNORE INTO errors VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![report.installation_id,error.request_id,error.signature(),if report.prepared_at>at+300 || error.at>at+300 {0} else {error.at},at,error.app_version.as_deref().unwrap_or("unknown"),record,report.report_id]).map_err(|_| "database_write_failed")?;
+            accepted += inserted;
+            if inserted > 0 { new_errors.push(error); }
         }
         let receipt = Receipt { report_id: report.report_id.clone(), received_at: at, accepted_errors: accepted, duplicate_errors: report.errors.len() - accepted };
         tx.execute("INSERT INTO reports VALUES(?1,?2,?3,?4,?5)", params![report.report_id,digest.as_slice(),at,serde_json::to_string(&receipt).map_err(|_| "invalid_report")?,String::from_utf8(canonical).map_err(|_| "invalid_report")?]).map_err(|_| "database_write_failed")?;
+        if !new_errors.is_empty() {
+            let summary = new_events::summary(report, &new_errors, at)?;
+            tx.execute("INSERT INTO events(created,kind,body) VALUES(?1,'new_errors',?2)", params![at,summary])
+                .map_err(|_| "database_write_failed")?;
+        }
         tx.commit().map_err(|_| "database_write_failed")?;
         Ok(receipt)
     }
@@ -148,7 +159,8 @@ impl Store {
         if free<10*1024*1024*1024 {issues.push("disk_space_low");}
         if latest.is_none_or(|t|now()-t>36*3600) {issues.push("backup_overdue");}
         if last_sweep.is_none_or(|t|now()-t>1800) {issues.push("sweep_overdue");}
-        Ok(json!({"diskFreeBytes":free,"lastBackupAt":latest,"lastSweepAt":last_sweep,"issues":issues}))
+        let immediate_errors_after_cursor: i64 = self.db.query_row("SELECT value FROM state WHERE key='immediate_errors_after_cursor'", [], |r| r.get(0)).map_err(|_| "database_read_failed")?;
+        Ok(json!({"diskFreeBytes":free,"lastBackupAt":latest,"lastSweepAt":last_sweep,"issues":issues,"immediateErrorsAfterCursor":immediate_errors_after_cursor}))
     }
 }
 
@@ -208,6 +220,7 @@ async fn bound(State(s): State<Arc<Server>>, mut request: axum::extract::Request
 pub fn router(s: Arc<Server>) -> Router {
     Router::new().route("/health", get(|| async { "ok" }))
         .route("/v1/error-reports", post(ingest))
+        .route("/v1/error-reports/known", post(known::check).layer(DefaultBodyLimit::max(fusion_report_protocol::KNOWN_JSON_LIMIT)))
         .route("/v1/admin/events", get(events)).route("/v1/admin/reports/{id}", get(report))
         .route("/v1/admin/reports", get(report_index::list))
         .route("/v1/admin/reliability", get(reliability::list))

@@ -6,15 +6,24 @@
 
 Windows 本机账号池 · 可读历史后台换号 · 额度与用量可见 · 一键启停
 
-**当前版本：1.0.13 · Windows 10 / 11 x64**
+**当前版本：1.0.14-rc.1 · 测试版 · Windows 10 / 11 x64**
 
-本版为维护者明确授权发布的修复版，支持应用内检查更新；自动检查与真实客户端验收分别记录。
+本版为维护者明确授权上传的候选测试版。稳定版仍为 1.0.13，应用内稳定更新清单保持原版本；自动检查与真实客户端验收分别记录。
 
-[下载 v1.0.13 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.13/Fusion_1.0.13_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.13) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.14-rc.1 测试版](https://github.com/Echolzt17/Fusion/releases/download/v1.0.14-rc.1/Fusion_1.0.14-rc.1_x64-setup.exe) · [稳定版 v1.0.13](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.13) · [测试版说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.14-rc.1) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
-## v1.0.13 的改进
+## v1.0.14-rc.1 的改进
+
+- 日志上报在内部记住服务器确认过的请求，后续仅提交新增故障和变化后的完整小时统计；同类故障发生在新请求上仍会提交。预览只读取本机，确认后核对旧安装已提交的候选。
+- 回执和内部去重记录同次原子保存。回执丢失、写盘或清理失败保持原报告编号和原字节；全部已知不生成新报告，损坏或未来版本保留原文件并明确报错。
+- 报告服务增加受限核对接口及新增错误即时事件，首次升级补发旧日报/提前提醒未覆盖的样本。独立维护检查每3小时运行，失败不误确认，无新增且健康无变化静默；客户端仍由用户手动确认上传。
+- 额度胶囊显示最近实际请求账号与套餐，无业务时明确标记首选；展开可见短长周期和快照时间。不同套餐百分比合计不换算成统一 Token，失效额度显示未知。
+
+协议、服务端、桌面增量上报和相关界面已通过隔离测试，兼容接收服务已部署。真实账号增量上报、旧安装样本核对、额度归属、Windows中文输入及覆盖安装继续待验收。此次发布为测试版，不改变稳定更新清单，不自动安装或替换日常客户端。
+
+## 沿用 v1.0.13 的改进
 
 - Codex 显示模型厂商 OpenAI，保留个人登录识别及独立账号池路由；账号池的运行状态仍在 Fusion 中明确显示。关闭时恢复原接入，旧池聊天不会误发给官方账号。
 - 同一个本地聊天的完整可读新用户轮次，在原账号额度耗尽或不可用时选择备用账号；只有明确 HTTP 429 拒绝可在输出前有界换号。任务已经输出、返回工具调用或执行不明确时不自动重放。

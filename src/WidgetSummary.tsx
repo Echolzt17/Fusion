@@ -9,11 +9,20 @@ export type WidgetDetails = {
   conversationKey: string | null; current: RequestSummary | null; all: RequestSummary;
   activeCurrent: number; activeAll: number;
 };
+type QuotaWindow = { remaining: number | null; resetAt: number | null; windowSeconds: number | null };
+export type WidgetAccount = {
+  label?: string | null; plan?: string | null;
+  source?: 'recent_request' | 'preferred' | 'unassigned' | 'unavailable';
+  quota?: { updatedAt: number | null; state: 'valid' | 'unknown' | 'stale' | 'query_failed'; primaryWindow: QuotaWindow; secondaryWindow: QuotaWindow } | null;
+};
 const number = (value: number) => value.toLocaleString('zh-CN');
+const date = (seconds?: number | null) => seconds ? new Date(seconds * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '未知';
+const cycle = (seconds?: number | null, fallback = '') => !seconds ? fallback : seconds >= 86400 ? `${Math.round(seconds / 86400)}天周期` : seconds >= 3600 ? `${Math.round(seconds / 3600)}小时周期` : `${Math.round(seconds / 60)}分钟周期`;
 const operations = [['responses', '对话'], ['image_generate', '图片生成'], ['image_edit', '图片编辑'], ['compact', '上下文压缩']] as const;
 
-export function WidgetSummary({ details, scope, onScopeChange, warning, onOpenConsole }: {
+export function WidgetSummary({ details, account, scope, onScopeChange, warning, onOpenConsole }: {
   details?: WidgetDetails; scope: 'current' | 'all'; onScopeChange: (scope: 'current' | 'all') => void;
+  account?: WidgetAccount;
   warning?: string | null; onOpenConsole: () => void;
 }) {
   const summary = scope === 'all' ? details?.all : details?.current;
@@ -34,6 +43,16 @@ export function WidgetSummary({ details, scope, onScopeChange, warning, onOpenCo
     <div className="widget-summary-body" id="widget-summary-body" role="tabpanel" aria-labelledby={'widget-tab-' + scope} tabIndex={0}>
       <p className="widget-scope-note">{scope === 'all' ? '所有经过账号池的业务请求' : '跟随最近请求对话'}{scope === 'current' && details?.conversationKey && <span>{details.conversationKey.startsWith('thread:') ? 'T' : 'S'}-{details.conversationKey.split(':').at(-1)?.slice(0, 12)}</span>}</p>
       {warning && <p className="widget-warning" role="alert">{warning}</p>}
+      <section className="widget-summary-section widget-account-details" aria-label="额度来源">
+        <h2>{account?.source === 'recent_request' ? '最近实际请求账号' : account?.source === 'preferred' ? '首选账号 · 尚无业务请求' : account?.source === 'unassigned' ? '最近请求 · 等待分配账号' : '请求账号归属未知'}</h2>
+        <p className="widget-account-name"><strong>{account?.label || '待确认账号'}</strong><span>{account?.plan || '套餐未知'}</span></p>
+        <dl className="widget-quota-windows">{(['primaryWindow', 'secondaryWindow'] as const).map((key, i) => {
+          const window = account?.quota?.[key];
+          return <div key={key}><dt>{cycle(window?.windowSeconds, i === 0 ? '短周期' : '长周期')}</dt><dd>{window?.remaining == null ? '—' : `${Math.round(window.remaining)}% 剩余`}</dd><small>{window?.resetAt ? `${date(window.resetAt)} 重置` : '重置时间未知'}</small></div>;
+        })}</dl>
+        <p className="widget-history-note">快照 {date(account?.quota?.updatedAt)}{account?.quota?.state === 'stale' ? ' · 已过期，等待刷新' : account?.quota?.state === 'query_failed' ? ' · 查询失败，额度未知' : !account?.quota || account.quota.state === 'unknown' ? ' · 额度待查询' : ''}</p>
+        <p className="widget-history-note">此处显示账号池额度，Codex 菜单里的套餐属于原生登录账号。并发请求可能使用其他池账号。</p>
+      </section>
       {!details ? <p className="widget-empty">正在读取汇总…</p> : !summary ? <p className="widget-empty">最近请求未识别对话，暂不显示本对话汇总。</p> : <>
         <section className="widget-summary-section">
           <h2>请求结果{active ? <span className="widget-active" role="status">进行中 {number(active)}</span> : null}</h2>
