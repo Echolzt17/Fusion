@@ -94,13 +94,23 @@ struct Seen {
     additional_tools: bool,
     readable_summary: bool,
     opaque_compaction: bool,
+    plaintext_agent: bool,
+    old_agent_id: bool,
+    standalone_output: bool,
+    old_standalone_id: bool,
 }
 fn fixture_response(n: usize, summary: bool) -> String {
     let reasoning = json!({"type":"reasoning","id":format!("fixture-reason-{n}"),"summary":[],
         "encrypted_content":if n == 0 { "OLD_ACCOUNT_PRIVATE_REASONING" } else { "NEW_ACCOUNT_PRIVATE_REASONING" }});
     let message = json!({"type":"message","id":format!("fixture-message-{n}"),"role":"assistant","phase":"final_answer","status":"completed",
         "content":[{"type":"output_text","text":if summary { "PUBLIC LOCAL COMPACTION SUMMARY".into() } else { format!("fixture-native-turn-{n}") },"annotations":[]}]});
-    let items = if summary { vec![message] } else { vec![reasoning, message] };
+    let agent = json!({"type":"agent_message","id":"fixture-agent-message-a","author":"fixture-agent",
+        "recipient":"all","content":[{"type":"input_text","text":"PUBLIC PLAINTEXT AGENT HANDOFF"}]});
+    let standalone = json!({"type":"function_call_output","id":"fixture-standalone-output-a",
+        "name":"public_fixture_read","namespace":"functions","output":"PUBLIC COMPLETED EXTERNAL TOOL RESULT"});
+    let items = if summary { vec![message] }
+        else if n == 0 { vec![reasoning, standalone, agent, message] }
+        else { vec![reasoning, message] };
     let mut events = vec![json!({"type":"response.created","response":{"id":format!("fixture-response-{n}"),"object":"response","status":"in_progress"}})];
     for (index, item) in items.iter().enumerate() {
         events.push(json!({"type":"response.output_item.added","output_index":index,"item":item}));
@@ -137,6 +147,14 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
                     additional_tools: body["input"].as_array().unwrap().iter().any(|item| item["type"] == "additional_tools"),
                     readable_summary: body.to_string().contains("PUBLIC LOCAL COMPACTION SUMMARY"),
                     opaque_compaction: body["input"].as_array().unwrap().iter().any(|item| matches!(item["type"].as_str(), Some("compaction" | "compaction_trigger"))),
+                    plaintext_agent: body["input"].as_array().unwrap().iter().any(|item| item["type"] == "agent_message"
+                        && item["author"] == "fixture-agent" && item["recipient"] == "all"
+                        && item["content"] == json!([{"type":"input_text","text":"PUBLIC PLAINTEXT AGENT HANDOFF"}])),
+                    old_agent_id: body["input"].as_array().unwrap().iter().any(|item| item["id"] == "fixture-agent-message-a"),
+                    standalone_output: body["input"].as_array().unwrap().iter().any(|item| item["type"] == "function_call_output"
+                        && item["call_id"].is_null() && item["name"] == "public_fixture_read" && item["namespace"] == "functions"
+                        && item["output"] == "PUBLIC COMPLETED EXTERNAL TOOL RESULT"),
+                    old_standalone_id: body["input"].as_array().unwrap().iter().any(|item| item["id"] == "fixture-standalone-output-a"),
                 });
                 ([("content-type", "text/event-stream")], fixture_response(n, compact_expected.swap(false, std::sync::atomic::Ordering::SeqCst)))
             }
@@ -230,6 +248,12 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
     assert!(requests[0].additional_tools);
     assert!(!last.old_cipher, "old account reasoning cannot be sent to the backup");
     assert!(!last.opaque_compaction);
+    if !local_compaction {
+        assert!(last.plaintext_agent, "actual native plaintext agent history must retain its author, recipient and content when reaching B");
+        assert!(!last.old_agent_id, "the old account's native agent item id must not reach B");
+        assert!(last.standalone_output, "the actual native named external tool result must keep its full output and routing fields when reaching B");
+        assert!(!last.old_standalone_id, "the old account's native external output item id must not reach B");
+    }
     if local_compaction { assert!(last.readable_summary, "actual native readable compaction summary must reach B"); }
     assert_eq!(accounts.store.binding(&binding_key("thread", &thread)).unwrap().as_deref(), Some("b"));
     assert_eq!(accounts.store.binding(&binding_key("opaque", "OLD_ACCOUNT_PRIVATE_REASONING")).unwrap().as_deref(), Some("a"));

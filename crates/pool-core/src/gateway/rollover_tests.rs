@@ -17,6 +17,201 @@ fn exhaust(accounts: &Accounts, id: &str) {
 }
 
 #[tokio::test]
+async fn string_user_turn_rolls_on_exhaustion_and_429_and_cannot_be_replayed_as_an_array() {
+    for exhausted in [true, false] {
+        let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+        let chat = binding_key("thread", "string-chat");
+        accounts.store.bind(&chat, "a").unwrap();
+        let seen = Arc::new(StdMutex::new(Vec::new())); let captured = seen.clone();
+        let (upstream, up) = serve(Router::new().route("/responses", post(move |h: HeaderMap, Json(v): Json<Value>| {
+            let captured = captured.clone(); async move {
+                let account = h["chatgpt-account-id"].to_str().unwrap().to_owned();
+                captured.lock().unwrap().push(account.clone());
+                assert_eq!(v["input"], json!([{"role":"user","content":[{"type":"input_text","text":"PUBLIC STRING TURN"}]}]));
+                if account == "chatgpt-a" {
+                    (StatusCode::TOO_MANY_REQUESTS, [("content-type", "text/event-stream")], String::new())
+                } else {
+                    (StatusCode::OK, [("content-type", "text/event-stream")], completed(json!([])))
+                }
+            }
+        }))).await;
+        let context = ctx(accounts.clone(), upstream);
+        context.scheduler.select_account(Some("a".into())).unwrap();
+        if exhausted { exhaust(&accounts, "a"); }
+        let (base, gw) = serve(router(context)).await;
+        let client = reqwest::Client::new();
+        let url = format!("{base}/v1/responses");
+        let headers = turn("string-chat", "new-string-turn");
+        let response = client.post(&url).bearer_auth("test-key")
+            .header("x-codex-turn-metadata", &headers)
+            .json(&json!({"input":"PUBLIC STRING TURN","stream":false})).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK); response.bytes().await.unwrap();
+        assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("b"));
+        for input in [json!("PUBLIC STRING TURN"), json!([{"role":"user","content":[{"type":"input_text","text":"PUBLIC STRING TURN"}]}])] {
+            let repeated = client.post(&url).bearer_auth("test-key")
+                .header("x-codex-turn-metadata", &headers)
+                .json(&json!({"input":input,"stream":false})).send().await.unwrap();
+            assert_eq!(repeated.status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(*seen.lock().unwrap(), if exhausted { vec!["chatgpt-b"] } else { vec!["chatgpt-a", "chatgpt-b"] });
+        let logs = accounts.store.logs().unwrap();
+        let routed = logs.iter().find(|log| log.status == "success").unwrap();
+        assert_eq!(routed.diagnostic.as_ref().unwrap().routing, Some(crate::diagnostics::RoutingDecision::Portable));
+        assert!(!serde_json::to_string(&logs).unwrap().contains("PUBLIC STRING TURN"));
+        gw.abort(); up.abort();
+    }
+}
+
+#[tokio::test]
+async fn quota_refusal_then_backup_queue_cancellation_releases_only_the_unsent_claim() {
+    let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+    let seen = Arc::new(StdMutex::new(Vec::new())); let captured = seen.clone();
+    let (upstream, up) = serve(Router::new().route("/responses", post(move |h: HeaderMap| {
+        let captured = captured.clone(); async move {
+            let account = h["chatgpt-account-id"].to_str().unwrap().to_owned();
+            captured.lock().unwrap().push(account.clone());
+            if account == "chatgpt-a" {
+                (StatusCode::TOO_MANY_REQUESTS, [("content-type", "text/event-stream")], String::new())
+            } else {
+                (StatusCode::OK, [("content-type", "text/event-stream")], completed(json!([])))
+            }
+        }
+    }))).await;
+    let context = ctx(accounts, upstream);
+    context.scheduler.save_service_settings(18765, 1).unwrap();
+    context.scheduler.select_account(Some("a".into())).unwrap();
+    let occupied = context.scheduler.acquire(Some("b")).await.unwrap();
+    let (base, gw) = serve(router(context.clone())).await;
+    let client = reqwest::Client::new(); let url = format!("{base}/v1/responses");
+    let metadata = turn("cancel-backup-chat", "cancel-backup-turn");
+    let body = json!({"input":[{"role":"user","content":"PUBLIC BACKUP QUEUE TASK"}],"stream":false});
+    let (pending_client, pending_url, pending_metadata, pending_body) = (client.clone(), url.clone(), metadata.clone(), body.clone());
+    let pending = tokio::spawn(async move {
+        pending_client.post(pending_url).bearer_auth("test-key")
+            .header("x-codex-turn-metadata", pending_metadata).json(&pending_body).send().await.unwrap()
+    });
+    let id = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if seen.lock().unwrap().len() == 1 {
+                if let Some(request) = context.requests.snapshot().into_iter().find(|r| r.phase == "queued") { break request.id; }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("explicit refusal must reach the actual backup queue");
+    context.requests.cancel(&id).await.unwrap();
+    assert_eq!(pending.await.unwrap().status().as_u16(), 499);
+    drop(occupied);
+    let retry = client.post(&url).bearer_auth("test-key").header("x-codex-turn-metadata", metadata)
+        .json(&body).send().await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK); retry.bytes().await.unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec!["chatgpt-a", "chatgpt-b"]);
+    gw.abort(); up.abort();
+}
+
+#[tokio::test]
+async fn encrypted_agent_history_reports_its_actual_blocker_without_sending_or_stripping_it() {
+    let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+    let chat = binding_key("thread", "encrypted-agent-chat");
+    accounts.store.bind(&chat, "a").unwrap();
+    accounts.store.bind(&binding_key("opaque", "PRIVATE_AGENT_CIPHER"), "a").unwrap();
+    exhaust(&accounts, "a");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0)); let count = calls.clone();
+    let (upstream, up) = serve(Router::new().route("/responses", post(move || {
+        let count = count.clone(); async move {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ([("content-type", "text/event-stream")], completed(json!([])))
+        }
+    }))).await;
+    let (base, gateway) = serve(router(ctx(accounts.clone(), upstream))).await;
+    let response = reqwest::Client::new().post(format!("{base}/v1/responses")).bearer_auth("test-key")
+        .header("x-codex-turn-metadata", turn("encrypted-agent-chat", "new-turn"))
+        .json(&json!({"input":[{"role":"user","content":"PUBLIC ORIGINAL TASK"},
+            {"type":"agent_message","author":"public-agent","recipient":"all","content":[
+                {"type":"input_text","text":"PUBLIC READABLE PART"},
+                {"type":"encrypted_content","encrypted_content":"PRIVATE_AGENT_CIPHER"}]},
+            {"role":"user","content":"PUBLIC FOLLOWUP"}],"stream":false})).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = response.json::<Value>().await.unwrap();
+    assert!(error["error"]["message"].as_str().unwrap().contains("账号专属加密内容"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("a"));
+    let logs = accounts.store.logs().unwrap();
+    assert_eq!(logs[0].diagnostic.as_ref().unwrap().routing, Some(crate::diagnostics::RoutingDecision::EncryptedHistory));
+    let serialized = serde_json::to_string(&logs).unwrap();
+    assert!(!serialized.contains("PRIVATE_AGENT_CIPHER") && !serialized.contains("PUBLIC FOLLOWUP"));
+    gateway.abort(); up.abort();
+}
+
+#[tokio::test]
+async fn unknown_reasoning_in_a_readable_user_turn_is_never_dropped_to_enable_rollover() {
+    let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+    let chat = binding_key("thread", "unknown-reasoning-chat");
+    accounts.store.bind(&chat, "a").unwrap();
+    exhaust(&accounts, "a");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0)); let count = calls.clone();
+    let (upstream, up) = serve(Router::new().route("/responses", post(move || {
+        let count = count.clone(); async move {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ([("content-type", "text/event-stream")], completed(json!([])))
+        }
+    }))).await;
+    let (base, gateway) = serve(router(ctx(accounts.clone(), upstream))).await;
+    let response = reqwest::Client::new().post(format!("{base}/v1/responses")).bearer_auth("test-key")
+        .header("x-codex-turn-metadata", turn("unknown-reasoning-chat", "new-turn"))
+        .json(&json!({"input":[{"role":"user","content":"PUBLIC ORIGINAL TASK"},
+            {"type":"reasoning","encrypted_content":"UNOWNED_PRIVATE_REASONING"},
+            {"role":"user","content":"PUBLIC FOLLOWUP"}],"stream":false})).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("a"));
+    assert!(accounts.store.binding(&binding_key("opaque", "UNOWNED_PRIVATE_REASONING")).unwrap().is_none());
+    let logs = accounts.store.logs().unwrap();
+    assert_eq!(logs[0].diagnostic.as_ref().unwrap().routing, Some(crate::diagnostics::RoutingDecision::EncryptedHistory));
+    assert!(!serde_json::to_string(&logs).unwrap().contains("UNOWNED_PRIVATE_REASONING"));
+    gateway.abort(); up.abort();
+}
+
+#[tokio::test]
+async fn nested_account_cipher_cannot_follow_a_chat_preference_to_another_account() {
+    for known in [false, true] {
+        for nested in [
+            json!({"type":"agent_message","author":"public-agent","recipient":"all","content":[
+                {"type":"input_text","text":"PUBLIC HANDOFF"},
+                {"type":"encrypted_content","encrypted_content":"PRIVATE_NESTED_CIPHER"}]}),
+            json!({"type":"function_call","name":"read","call_id":"old-call","arguments":"{}",
+                "encrypted_function_args":["PRIVATE_NESTED_CIPHER"]}),
+        ] {
+            let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+            let chat = binding_key("thread", "nested-cipher-chat");
+            accounts.store.bind(&chat, "a").unwrap();
+            accounts.store.switch_chat_bindings(std::slice::from_ref(&chat), "a", "b").unwrap();
+            if known { accounts.store.bind(&binding_key("opaque", "PRIVATE_NESTED_CIPHER"), "a").unwrap(); }
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0)); let count = calls.clone();
+            let (upstream, up) = serve(Router::new().route("/responses", post(move || {
+                let count = count.clone(); async move {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    ([("content-type", "text/event-stream")], completed(json!([])))
+                }
+            }))).await;
+            let context = ctx(accounts.clone(), upstream);
+            let item = json!({"output":[nested.clone()]});
+            let keys = continuity::output_keys(&item);
+            assert!(keys.contains(&binding_key("opaque", "PRIVATE_NESTED_CIPHER")), "output and input must share the same ownership extraction");
+            let (base, gateway) = serve(router(context)).await;
+            let response = reqwest::Client::new().post(format!("{base}/v1/responses")).bearer_auth("test-key")
+                .header("x-codex-turn-metadata", turn("nested-cipher-chat", "new-turn"))
+                .json(&json!({"input":[{"role":"user","content":"PUBLIC TASK"},nested,
+                    {"role":"user","content":"PUBLIC FOLLOWUP"}],"stream":false})).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("b"));
+            assert!(!serde_json::to_string(&accounts.store.logs().unwrap()).unwrap().contains("PRIVATE_NESTED_CIPHER"));
+            gateway.abort(); up.abort();
+        }
+    }
+}
+
+#[tokio::test]
 async fn exhausted_chat_rolls_to_backup_and_tool_continuation_keeps_new_account() {
     let (_dir, accounts) = fixture(); add(&accounts,"a"); add(&accounts,"b");
     let chat = binding_key("thread","same-local-chat");

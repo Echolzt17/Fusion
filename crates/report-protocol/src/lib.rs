@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 mod reliability;
 pub use reliability::*;
+mod known;
+pub use known::*;
 pub const WIRE_LIMIT: usize = 4 * 1024 * 1024;
 pub const JSON_LIMIT: usize = 16 * 1024 * 1024;
 pub const RECORD_LIMIT: usize = 2000;

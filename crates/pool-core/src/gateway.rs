@@ -50,6 +50,8 @@ mod catalog_tests;
 mod rollover_tests;
 #[cfg(test)]
 mod native_rollover_tests;
+#[cfg(test)]
+mod auth_rollover_tests;
 
 const MAX_EVENT_BYTES: usize = 64 * 1024 * 1024;
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -261,13 +263,29 @@ fn session(h: &HeaderMap) -> Option<String> {
         })
 }
 fn opaque_keys(items: &Value) -> Vec<String> {
-    items
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item["encrypted_content"].as_str())
-        .map(|s| binding_key("opaque", s))
-        .collect()
+    let mut keys = Vec::new();
+    for item in items.as_array().into_iter().flatten() {
+        if let Some(cipher) = item["encrypted_content"].as_str() {
+            keys.push(binding_key("opaque", cipher));
+        }
+        // Native agent handoffs and encrypted function arguments carry the
+        // same account ownership as top-level reasoning. Inspect only these
+        // protocol fields, never schemas, tool arguments or arbitrary JSON.
+        if item["type"] == "agent_message" {
+            for part in item["content"].as_array().into_iter().flatten()
+                .filter(|part| part["type"] == "encrypted_content") {
+                if let Some(cipher) = part["encrypted_content"].as_str() {
+                    keys.push(binding_key("opaque", cipher));
+                }
+            }
+        }
+        if item["type"] == "function_call" {
+            for cipher in item["encrypted_function_args"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                keys.push(binding_key("opaque", cipher));
+            }
+        }
+    }
+    keys
 }
 fn bind_output(ctx: &Context, value: &Value, account: &str) -> Result<()> {
     ctx.accounts
@@ -471,6 +489,7 @@ struct Audit {
     start: Instant,
     status: String,
     advice: String,
+    authorization_failures: Vec<String>,
     usage: Option<crate::usage::TokenUsage>,
     transport: transport::Telemetry,
     retry_client: Option<reqwest::Client>,
@@ -484,6 +503,7 @@ struct Audit {
 impl Audit {
     fn new(ctx: Context, op: &str) -> Self {
         let diagnostic = RequestDiagnostic {
+            routing: None,
             details: None,
             execution: Some(fusion_report_protocol::Execution { active_requests: Some(ctx.requests.snapshot().len() as u32), ..Default::default() }),
             app_version: env!("CARGO_PKG_VERSION").into(),
@@ -509,6 +529,7 @@ impl Audit {
             start: Instant::now(),
             status: "cancelled".into(),
             advice: "请求被客户端取消或服务停止；上游任务是否停止无法保证，未自动重放".into(),
+            authorization_failures: Vec::new(),
             usage: None,
             transport: Default::default(),
             retry_client: None,
@@ -729,6 +750,20 @@ struct ChatRouting {
     keys: Vec<String>,
     preferred: Option<String>,
 }
+fn unavailable_advice(a: &Audit, message: &str) -> String {
+    if !message.starts_with("原会话账号不可用") { return message.to_owned(); }
+    use crate::diagnostics::RoutingDecision as Routing;
+    let reason = match a.diagnostic.routing {
+        Some(Routing::EncryptedHistory) => "历史中包含账号专属加密内容，无法完整交给备用账号",
+        Some(Routing::ServerReference) => "当前请求依赖原账号的服务端上下文引用",
+        Some(Routing::BoundTurn | Routing::ToolContinuation) => "当前请求正在接续原轮次，不能换账号重放已开始的任务",
+        Some(Routing::IncompleteTools) => "历史中的工具调用与结果尚未完整配对，不能直接换账号",
+        Some(Routing::UnsupportedItem | Routing::UnsupportedContent | Routing::UnsupportedControl) =>
+            "当前历史包含尚未支持安全换号的消息结构",
+        _ => return message.to_owned(),
+    };
+    format!("原账号不可用；{reason}。本次请求未发送上游，请恢复原账号后重试")
+}
 async fn prepare_routed(
     a: &mut Audit,
     h: &HeaderMap,
@@ -772,55 +807,84 @@ async fn prepare_routed(
     }
     let scheduler = a.ctx.scheduler.clone();
     let image = matches!(a.operation.as_str(), "image_generate" | "image_edit");
-    a.phase("catalog_queue");
-    let tracking = a.tracking.clone();
-    let acquire = async {
-        if a.operation == "models" {
-            scheduler.acquire_catalog(pin.as_deref()).await
-        } else if routing.is_some() {
-            scheduler.acquire_portable_observed(pin.as_deref(), image, move |phase| {
-                if let Some(request) = &tracking {
-                    request.phase(match phase { QueuePhase::Capacity => "queued", QueuePhase::Cooldown => "cooldown" });
+    // Keep the original request's queue budget across authorization fallback
+    // and explicit quota refusals. Each prepare shares Audit::start.
+    let selection_deadline = tokio::time::Instant::now()
+        + crate::scheduler::REQUEST_QUEUE_WAIT.saturating_sub(a.start.elapsed());
+    let (lease, token) = loop {
+        a.phase("catalog_queue");
+        let tracking = a.tracking.clone();
+        let authorization_failures = a.authorization_failures.clone();
+        let acquire = async {
+            if a.operation == "models" {
+                scheduler.acquire_catalog(pin.as_deref()).await
+            } else if routing.is_some() {
+                scheduler.acquire_portable_excluding_observed(pin.as_deref(), &authorization_failures, selection_deadline, image, move |phase| {
+                    if let Some(request) = &tracking {
+                        request.phase(match phase { QueuePhase::Capacity => "queued", QueuePhase::Cooldown => "cooldown" });
+                    }
+                }).await
+            } else {
+                scheduler.acquire_observed(pin.as_deref(), image, move |phase| {
+                    if let Some(request) = &tracking {
+                        request.phase(match phase {
+                            QueuePhase::Capacity => "queued",
+                            QueuePhase::Cooldown => "cooldown",
+                        });
+                    }
+                }).await
+            }
+        };
+        let lease = tokio::select! {
+            _ = a.ctx.cancel.cancelled() => return Err(Box::new(a.error(StatusCode::SERVICE_UNAVAILABLE,"service_stopped","服务已停止"))),
+            result = acquire => match result {
+                Ok(lease) => lease,
+                Err(error) => {
+                    a.diagnostic.failure_stage = Some(FailureStage::Queue);
+                    let advice = unavailable_advice(a, &error);
+                    return Err(Box::new(a.error(StatusCode::SERVICE_UNAVAILABLE, "account_unavailable", &advice)));
                 }
-            }).await
-        } else {
-            scheduler.acquire_observed(pin.as_deref(), image, move |phase| {
-                if let Some(request) = &tracking {
-                    request.phase(match phase {
-                        QueuePhase::Capacity => "queued",
-                        QueuePhase::Cooldown => "cooldown",
-                    });
+            }
+        };
+        a.account = Some(lease.account.id.clone());
+        if let Some(request) = &a.tracking {
+            request.identify(a.account.as_deref(), a.conversation_key.as_deref());
+        }
+        a.ctx.accounts.store.note_request_account(&a.id, &lease.account.id);
+        // A detached credential rotation may finish safely; cancellation must still release this request's lease.
+        a.phase("catalog_auth");
+        let token_request = async {
+            if a.operation == "models" {
+                tokio::time::timeout(Duration::from_secs(50), a.ctx.accounts.token(&lease.account.id)).await
+                    .map_err(|_| "模型目录授权等待超时，未发送目录请求".to_owned())?
+            } else { a.ctx.accounts.token(&lease.account.id).await }
+        };
+        let token_result = tokio::select! {
+            _ = a.ctx.cancel.cancelled() => return Err(Box::new(a.error(StatusCode::SERVICE_UNAVAILABLE, "service_stopped", "服务已停止"))),
+            result = token_request => result,
+        };
+        let token = match token_result {
+            Ok(t) => t.access_token,
+            Err(e) => {
+                a.authorization_failures.push(lease.account.id.clone());
+                // No business request was sent. For a verified readable new turn,
+                // try each subscription at most once, without replaying its token
+                // refresh or persisting transient failures as account health.
+                let has_backup = routing.is_some() && a.authorization_failures.len() < 8
+                    && a.ctx.accounts.store.accounts().is_ok_and(|accounts| accounts.iter().any(|account|
+                        !a.authorization_failures.contains(&account.id) && scheduler.available(account)));
+                if has_backup {
+                    drop(lease);
+                    continue;
                 }
-            }).await
-        }
-    };
-    let lease = tokio::select! {_=a.ctx.cancel.cancelled()=>return Err(Box::new(a.error(StatusCode::SERVICE_UNAVAILABLE,"service_stopped","服务已停止"))),r=acquire=>match r{Ok(l)=>l,Err(e)=>{a.diagnostic.failure_stage=Some(FailureStage::Queue);return Err(Box::new(a.error(StatusCode::SERVICE_UNAVAILABLE,"account_unavailable",&e)))}}};
-    a.account = Some(lease.account.id.clone());
-    if let Some(request) = &a.tracking {
-        request.identify(a.account.as_deref(), a.conversation_key.as_deref());
-    }
-    a.ctx.accounts.store.note_request_account(&a.id, &lease.account.id);
-    // A detached credential rotation may finish safely; cancellation must still release this request's lease.
-    a.phase("catalog_auth");
-    let token_request = async {
-        if a.operation == "models" {
-            tokio::time::timeout(Duration::from_secs(50), a.ctx.accounts.token(&lease.account.id)).await
-                .map_err(|_| "模型目录授权等待超时，未发送目录请求".to_owned())?
-        } else { a.ctx.accounts.token(&lease.account.id).await }
-    };
-    let token_result = tokio::select! {
-        _ = a.ctx.cancel.cancelled() => return Err(Box::new(a.error(StatusCode::SERVICE_UNAVAILABLE, "service_stopped", "服务已停止"))),
-        result = token_request => result,
-    };
-    let token = match token_result {
-        Ok(t) => t.access_token,
-        Err(e) => {
-            return Err(Box::new(a.error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "authorization_unavailable",
-                &e,
-            )))
-        }
+                return Err(Box::new(a.error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "authorization_unavailable",
+                    &e,
+                )))
+            }
+        };
+        break (lease, token);
     };
     let keys = match continuity::identities(h, v) {
         Ok(k) => k,
@@ -857,18 +921,43 @@ async fn prepare_response(
     // Only a complete new user turn can use a soft chat preference. A tool
     // continuation, image turn, compacted history or server reference keeps its
     // original hard affinity. Unknown input is never made portable by guessing.
-    let projection = portable::project(v);
+    let projection = portable::project_checked(v);
+    use crate::diagnostics::RoutingDecision as Routing;
+    a.diagnostic.routing = Some(match projection.as_ref().err() {
+        None => Routing::Portable,
+        Some(portable::BlockReason::ServerReference) => Routing::ServerReference,
+        Some(portable::BlockReason::MissingHistory) => Routing::MissingHistory,
+        Some(portable::BlockReason::NotNewUserTurn) => Routing::ToolContinuation,
+        Some(portable::BlockReason::EncryptedHistory) => Routing::EncryptedHistory,
+        Some(portable::BlockReason::UnsupportedControl) => Routing::UnsupportedControl,
+        Some(portable::BlockReason::UnsupportedContent) => Routing::UnsupportedContent,
+        Some(portable::BlockReason::IncompleteTools) => Routing::IncompleteTools,
+        Some(portable::BlockReason::UnsupportedItem) => Routing::UnsupportedItem,
+    });
     let identities = continuity::identities(h, v);
-    let can_switch = projection.is_some() && identities.as_ref().is_ok_and(|ids| {
+    let unbound_turn = identities.as_ref().is_ok_and(|ids| {
         ids.iter().filter(|key| key.starts_with("turn:")).all(|key|
             a.ctx.accounts.store.binding(key).is_ok_and(|account| account.is_none()))
     });
+    let can_switch = projection.is_ok() && unbound_turn;
+    if projection.is_ok() && !unbound_turn { a.diagnostic.routing = Some(Routing::BoundTurn); }
     if !can_switch { return prepare(a, h, v).await; }
+    // A readable projection may omit known old reasoning, but it must never
+    // turn unowned ciphertext from imported/unknown history into a portable
+    // request by silently dropping it.
+    if opaque_keys(&v["input"]).iter().any(|key|
+        !a.ctx.accounts.store.binding(key).is_ok_and(|owner| owner.is_some())) {
+        a.diagnostic.routing = Some(Routing::EncryptedHistory);
+        return prepare(a, h, v).await;
+    }
     let (keys, preferred) = match portable::chat_preference(&a.ctx, h, v) {
         Ok(state) => state,
         Err(e) => return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e))),
     };
-    if keys.is_empty() { return prepare(a, h, v).await; }
+    if keys.is_empty() {
+        a.diagnostic.routing = Some(Routing::MissingChatIdentity);
+        return prepare(a, h, v).await;
+    }
     let route = ChatRouting { keys, preferred };
     let result = prepare_routed(a, h, v, Some(&route)).await?;
     let account = &result.0.account.id;
@@ -1223,6 +1312,12 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
             "请求必须是 JSON 对象",
         );
     }
+    // Normalize before both replay protection and routing. Doing this only
+    // after prepare used to hard-bind valid string input to the original
+    // account, disabling exhaustion/429 rollover for these new user turns.
+    if let Some(text) = v["input"].as_str() {
+        v["input"] = json!([{"role":"user","content":[{"type":"input_text","text":text}]}]);
+    }
     let mut replay = match native_claim(&mut a, &h, &v) { Ok(claim) => claim, Err(response) => return *response };
     let stream = v["stream"].as_bool().unwrap_or(false);
     let (mut lease, mut t) = match prepare_response(&mut a, &mut h, &mut v).await {
@@ -1233,9 +1328,6 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
     v["store"] = json!(false);
     if v.get("instructions").is_none() {
         v["instructions"] = json!("");
-    }
-    if let Some(text) = v["input"].as_str() {
-        v["input"] = json!([{"role":"user","content":[{"type":"input_text","text":text}]}]);
     }
     let turn_keys = continuity::identities(&h, &v).unwrap_or_default().into_iter()
         .filter(|key| key.starts_with("turn:")).collect::<Vec<_>>();
@@ -1257,6 +1349,12 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
         };
         // HTTP 429 is an explicit refusal before output. Unlike a broken
         // connection, 5xx or failed SSE, it cannot have executed model tools.
+        if r.status() == StatusCode::TOO_MANY_REQUESTS {
+            // The server explicitly refused this attempt. Cancellation while
+            // authorizing/queuing a backup must not retain an ambiguous-send
+            // claim. A subsequent dispatch sets it again before sending.
+            if let Some(claim) = replay.as_mut() { claim.dispatched = false; }
+        }
         if r.status() != StatusCode::TOO_MANY_REQUESTS || !portable_attempt || tried.len() >= max_accounts {
             break r;
         }

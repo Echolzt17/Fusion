@@ -31,6 +31,29 @@ async fn chat_preference_uses_backup_only_after_the_original_is_unavailable() {
 }
 
 #[tokio::test]
+async fn portable_exclusions_share_a_fixed_deadline_across_account_attempts() {
+    let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
+    let scheduler = Scheduler::new(accounts.store.clone());
+    scheduler.save_service_settings(18765, 1).unwrap();
+    let a = scheduler.acquire(Some("a")).await.unwrap();
+    let b = scheduler.acquire(Some("b")).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(40);
+    let first = scheduler.acquire_portable_excluding_observed(
+        Some("a"), &["b".to_owned()], deadline, false, |_| {},
+    ).await;
+    assert!(first.err().unwrap().contains("排队超时"));
+    drop(b);
+    // A later candidate is now free, but another prepare cannot restart the
+    // exhausted budget or obtain a lease after the request's fixed deadline.
+    let second = scheduler.acquire_portable_excluding_observed(
+        Some("b"), &["a".to_owned()], deadline, false, |_| {},
+    ).await;
+    assert!(second.err().unwrap().contains("排队超时"));
+    assert!(!scheduler.is_active("b"));
+    drop(a);
+}
+
+#[tokio::test]
 async fn chat_preference_waits_for_busy_original_and_rechecks_its_health() {
     let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");
     let scheduler = Scheduler::new(accounts.store.clone());

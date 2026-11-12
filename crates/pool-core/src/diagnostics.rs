@@ -173,6 +173,10 @@ pub enum ProxySource {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestDiagnostic {
+    /// Closed local routing category only. Never stores input, identifiers or
+    /// encrypted material, and is not part of the remote report wire format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<RoutingDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<fusion_report_protocol::FailureDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +193,21 @@ pub struct RequestDiagnostic {
     pub network_error_kind: Option<NetworkErrorKind>,
     /// Selected configuration for this request, not proof of the proxy's outbound route.
     pub proxy_source: ProxySource,
+}
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingDecision {
+    Portable,
+    BoundTurn,
+    MissingChatIdentity,
+    ServerReference,
+    MissingHistory,
+    ToolContinuation,
+    EncryptedHistory,
+    UnsupportedControl,
+    UnsupportedContent,
+    IncompleteTools,
+    UnsupportedItem,
 }
 pub(crate) fn failure_origin(status: &str, d: &RequestDiagnostic) -> &'static str {
     if matches!(status, "reauthorization_required" | "upstream_rate_limited")

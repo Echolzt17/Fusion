@@ -294,8 +294,26 @@ impl Scheduler {
         image: bool,
         progress: impl Fn(QueuePhase) + Send + Sync,
     ) -> Result<Lease> {
+        self.acquire_portable_excluding_observed(
+            preferred, &[], tokio::time::Instant::now() + REQUEST_QUEUE_WAIT, image, progress,
+        ).await
+    }
+    /// A failed authorization has not dispatched business input. Exclusions
+    /// apply only to this request, without changing other chats' health.
+    pub(crate) async fn acquire_portable_excluding_observed(
+        self: &Arc<Self>,
+        preferred: Option<&str>,
+        excluded: &[String],
+        deadline: tokio::time::Instant,
+        image: bool,
+        progress: impl Fn(QueuePhase) + Send + Sync,
+    ) -> Result<Lease> {
+        let wait = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if wait.is_zero() {
+            return Err("本机账号并发繁忙，排队超时；本次请求未发送上游，请等待当前任务完成".into());
+        }
         self.acquire_affinity_observed(
-            Affinity::Portable(preferred), REQUEST_QUEUE_WAIT, image, true, progress,
+            Affinity::Portable(preferred), excluded, wait, image, true, progress,
         ).await
     }
     async fn acquire_wait(self: &Arc<Self>, pinned: Option<&str>, wait: Duration) -> Result<Lease> {
@@ -319,12 +337,13 @@ impl Scheduler {
         progress: impl Fn(QueuePhase) + Send + Sync,
     ) -> Result<Lease> {
         self.acquire_affinity_observed(
-            Affinity::Pinned(pinned), wait, image, allow_cooldown, progress,
+            Affinity::Pinned(pinned), &[], wait, image, allow_cooldown, progress,
         ).await
     }
     async fn acquire_affinity_observed(
         self: &Arc<Self>,
         affinity: Affinity<'_>,
+        excluded: &[String],
         wait: Duration,
         image: bool,
         allow_cooldown: bool,
@@ -357,7 +376,8 @@ impl Scheduler {
                 let mut candidates: Vec<_> = accounts
                     .iter()
                     .filter(|a| {
-                        pinned.is_none_or(|id| a.id == id) && eligible(a, &state, pinned.is_some())
+                        !excluded.contains(&a.id)
+                            && pinned.is_none_or(|id| a.id == id) && eligible(a, &state, pinned.is_some())
                     })
                     .cloned()
                     .collect();
@@ -365,7 +385,8 @@ impl Scheduler {
                     let cooling = allow_cooldown
                         && tokio::time::Instant::now() < cooldown_deadline
                         && accounts.iter().any(|a| {
-                            pinned.is_none_or(|id| a.id == id)
+                            !excluded.contains(&a.id)
+                                && pinned.is_none_or(|id| a.id == id)
                                 && !state.removing.contains(&a.id)
                                 && a.state == "ready"
                                 && !quota_blocked(a)

@@ -12,9 +12,12 @@ pub(super) fn report(at: i64, count: usize) -> Report {
 fn idempotent_receipts_overlap_and_identity_conflict() {
     let dir=tempfile::tempdir().unwrap();let mut s=Store::open(dir.path(),32*1024*1024).unwrap();let at=now();let mut r=report(at,6);
     let a=s.ingest(&r,at).unwrap();assert_eq!(a.accepted_errors,6);
+    assert_eq!(s.events(0).unwrap().len(),1);
+    assert_eq!(s.events(0).unwrap()[0]["summary"]["acceptedErrors"],6);
     let b=s.ingest(&r,at+3).unwrap();assert_eq!(b.received_at,at);assert_eq!(b.accepted_errors,6);
     r.environment.uptime_seconds+=1;assert_eq!(s.ingest(&r,at).unwrap_err(),"report_id_conflict");
     r.report_id=uuid::Uuid::new_v4().to_string();let c=s.ingest(&r,at).unwrap();assert_eq!(c.accepted_errors,0);assert_eq!(c.duplicate_errors,6);
+    assert_eq!(s.events(0).unwrap().len(),1);
     drop(s);let s=Store::open(dir.path(),32*1024*1024).unwrap();assert_eq!(s.report(&r.report_id).unwrap()["errors"].as_array().unwrap().len(),6);
 }
 #[test]
@@ -35,16 +38,18 @@ fn v1_receipts_remain_idempotent_and_v2_accepts_only_finite_new_diagnostics() {
     r.errors[0].details.as_mut().unwrap().upstream_failure=Some("server".into());assert!(r.encode().is_ok());
 }
 #[test]
-fn five_silent_six_alert_duplicates_silent_and_daily_at_ten_beijing() {
+fn immediate_errors_do_not_change_legacy_six_alert_or_daily_at_ten_beijing() {
     let dir=tempfile::tempdir().unwrap();let mut s=Store::open(dir.path(),32*1024*1024).unwrap();
     let cutoff=21000*86400+2*3600;let at=cutoff-1800;let mut r=report(at,5);
-    s.sweep(at).unwrap();s.ingest(&r,at).unwrap();s.sweep(at+1).unwrap();assert!(s.events(0).unwrap().is_empty());
+    s.sweep(at).unwrap();s.ingest(&r,at).unwrap();s.sweep(at+1).unwrap();
+    assert_eq!(s.events(0).unwrap().len(),1);assert_eq!(s.events(0).unwrap()[0]["kind"],"new_errors");
     r.report_id=uuid::Uuid::new_v4().to_string();r.errors.push(report(at,1).errors.remove(0));s.ingest(&r,at+10).unwrap();s.sweep(at+11).unwrap();
-    let first=s.events(0).unwrap();assert_eq!(first.len(),1);assert_eq!(first[0]["kind"],"early");assert_eq!(first[0]["summary"]["groups"][0]["count"],6);
-    s.sweep(at+900).unwrap();assert_eq!(s.events(0).unwrap().len(),1);
-    s.sweep(cutoff).unwrap();let events=s.events(0).unwrap();assert_eq!(events.len(),2);assert_eq!(events[1]["kind"],"daily");
-    assert!(s.events(events[1]["id"].as_i64().unwrap()).unwrap().is_empty());
-    s.sweep(cutoff+900).unwrap();s.sweep(cutoff+86400).unwrap();assert_eq!(s.events(0).unwrap().len(),2);
+    let first=s.events(0).unwrap();assert_eq!(first.len(),3);assert_eq!(first[2]["kind"],"early");assert_eq!(first[2]["summary"]["groups"][0]["count"],6);
+    assert_eq!(first[1]["summary"]["acceptedErrors"],1);
+    s.sweep(at+900).unwrap();assert_eq!(s.events(0).unwrap().len(),3);
+    s.sweep(cutoff).unwrap();let events=s.events(0).unwrap();assert_eq!(events.len(),4);assert_eq!(events[3]["kind"],"daily");
+    assert!(s.events(events[3]["id"].as_i64().unwrap()).unwrap().is_empty());
+    s.sweep(cutoff+900).unwrap();s.sweep(cutoff+86400).unwrap();assert_eq!(s.events(0).unwrap().len(),4);
 }
 #[test]
 fn historical_and_future_errors_do_not_trigger_early_and_backup_restores() {
@@ -64,6 +69,13 @@ async fn http_real_loopback_upload_private_reads_and_rejected_success() {
     let task=tokio::spawn(async move {axum::serve(listener,router(server)).await.unwrap();});let client=reqwest::Client::builder().no_proxy().build().unwrap();let r=report(now(),1);
     let response=client.post(format!("{url}/v1/error-reports")).header("content-type","application/gzip").body(r.encode().unwrap()).send().await.unwrap();assert_eq!(response.status(),200);
     assert_eq!(response.json::<Receipt>().await.unwrap().accepted_errors,1);
+    let known=fusion_report_protocol::KnownRequest {schema_version:1,installation_id:r.installation_id.clone(),request_ids:vec![r.errors[0].request_id.clone(),uuid::Uuid::new_v4().to_string()],buckets:vec![]};
+    let response=client.post(format!("{url}/v1/error-reports/known")).json(&known).send().await.unwrap();assert_eq!(response.status(),200);
+    let known_result=response.json::<fusion_report_protocol::KnownResponse>().await.unwrap();known_result.validate_for(&known).unwrap();
+    assert_eq!(known_result.request_ids,vec![r.errors[0].request_id.clone()]);
+    assert_eq!(client.get(format!("{url}/v1/error-reports/known")).send().await.unwrap().status(),405);
+    assert_eq!(client.post(format!("{url}/v1/error-reports/known")).json(&serde_json::json!({"installationId":r.installation_id,"requestIds":[],"buckets":[],"schemaVersion":1,"arbitrary":"private"})).send().await.unwrap().status(),400);
+    assert_eq!(client.post(format!("{url}/v1/error-reports/known")).header("content-type","application/json").body(vec![b' ';fusion_report_protocol::KNOWN_JSON_LIMIT+1]).send().await.unwrap().status(),413);
     let mut modern=report(now(),1);modern.schema_version=2;
     modern.errors[0].details=Some(fusion_report_protocol::FailureDetails {terminal_event:Some("failed".into()),upstream_failure:Some("server".into()),..Default::default()});
     assert_eq!(client.post(format!("{url}/v1/error-reports")).header("content-type","application/gzip").body(modern.encode().unwrap()).send().await.unwrap().status(),200);
@@ -76,6 +88,26 @@ async fn http_real_loopback_upload_private_reads_and_rejected_success() {
     assert_eq!(client.post(format!("{url}/v1/error-reports")).header("content-type","application/gzip").body(vec![0;WIRE_LIMIT+1]).send().await.unwrap().status(),413);
     assert_eq!(client.post(format!("{url}/v1/error-reports")).header("content-type","application/gzip").body("private invalid data").send().await.unwrap().status(),400);
     task.abort();
+}
+
+#[test]
+fn immediate_event_and_error_are_atomic_and_legacy_cutover_is_stable() {
+    let dir=tempfile::tempdir().unwrap();let at=now();let store=Store::open(dir.path(),32*1024*1024).unwrap();
+    // Simulate the exact existing schema before this receiver version was installed.
+    store.db.execute("DELETE FROM state WHERE key='immediate_errors_after_cursor'",[]).unwrap();
+    store.db.execute("INSERT INTO events(created,kind,body) VALUES(?1,'daily','{}')",[at]).unwrap();
+    let legacy=store.events(0).unwrap();drop(store);
+    let mut store=Store::open(dir.path(),32*1024*1024).unwrap();
+    assert_eq!(store.health().unwrap()["immediateErrorsAfterCursor"],legacy[0]["id"]);
+    store.db.execute_batch("CREATE TEMP TRIGGER fail_notice BEFORE INSERT ON events WHEN new.kind='new_errors' BEGIN SELECT raise(ABORT,'public-fake-failure'); END;").unwrap();
+    let report=report(at,1);assert_eq!(store.ingest(&report,at).unwrap_err(),"database_write_failed");
+    for table in ["errors","reports"] {assert_eq!(store.db.query_row(&format!("SELECT count(*) FROM {table}"),[],|r|r.get::<_,usize>(0)).unwrap(),0);}
+    store.db.execute_batch("DROP TRIGGER fail_notice;").unwrap();store.ingest(&report,at).unwrap();
+    assert_eq!(store.events(0).unwrap()[0],legacy[0]);drop(store);
+    let store=Store::open(dir.path(),32*1024*1024).unwrap();
+    assert_eq!(store.health().unwrap()["immediateErrorsAfterCursor"],legacy[0]["id"]);
+    assert_eq!(store.events(0).unwrap()[1]["kind"],"new_errors");
+    assert_eq!(store.db.query_row("PRAGMA user_version",[],|r|r.get::<_,u32>(0)).unwrap(),1);
 }
 #[test]
 fn capacity_forward_schema_and_seven_backup_retention() {

@@ -177,6 +177,41 @@ test('empty error history never submits or opens confirmation',async({page})=>{
   expect(await page.evaluate(()=>(window as any).fixture.calls.filter((c:any)=>c.command==='submit_error_report').length)).toBe(0);
 });
 
+test('server-known records close confirmation without creating a report receipt',async({page})=>{
+  await reportingFixture(page);
+  await page.evaluate(()=>{
+    const w=window as any, invoke=w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke=async(command:string,args:any={})=>{
+      if(command==='submit_error_report'){
+        w.fixture.calls.push({command,args});
+        return {phase:'empty',preview:null,receipt:null,message:'暂无新增可上报诊断记录'};
+      }
+      return invoke(command,args);
+    };
+  });
+  const trigger=page.getByRole('button',{name:'日志上报',exact:true});
+  await trigger.click();
+  const confirmation=page.getByRole('dialog',{name:'确认上报错误日志'});
+  await expect(confirmation).toContainText('6 条');
+  expect(await page.evaluate(()=>(window as any).fixture.calls.filter((c:any)=>c.command==='submit_error_report').length)).toBe(0);
+  await confirmation.getByRole('button',{name:'确认上报',exact:true}).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(trigger).toBeEnabled();
+  await expect(trigger).toBeFocused();
+  expect(await page.evaluate(()=>(window as any).fixture.calls.filter((c:any)=>c.command==='submit_error_report').map((c:any)=>c.args.draftId))).toEqual(['report-fixture']);
+  await expect(page.locator('.report-receipt')).toHaveCount(0);
+  await page.getByRole('button',{name:/通知中心/}).click();
+  await expect(page.getByRole('region',{name:'通知列表'})).toContainText('暂无新增可上报诊断记录');
+  await expect(page.getByRole('region',{name:'通知列表'})).not.toContainText('错误日志上报成功');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'最近上报',exact:true}).click();
+  const history=page.getByRole('dialog',{name:'最近上报',exact:true});
+  await expect(history.locator('.report-history>li')).toHaveCount(1);
+  await history.getByText('查看回执',{exact:true}).click();
+  await expect(history).toContainText('00000000-0000-4000-8000-000000000001');
+  await expect(history).not.toContainText('report-fixture');
+});
+
 test('recent reports remain available independently of a new preview without submitting',async({page})=>{
   await reportingFixture(page,true);
   await page.setViewportSize({width:700,height:650});

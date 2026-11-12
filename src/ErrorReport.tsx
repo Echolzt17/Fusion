@@ -34,7 +34,14 @@ export function ErrorReport({disabled,notify}:{disabled:boolean;notify:(notice:{
   }
   async function submit() {
     if(!state?.preview)return;
-    const result=await invoke<ReportState>('submit_error_report',{draftId:state.preview.draftId});setState(result);
+    const result=await invoke<ReportState>('submit_error_report',{draftId:state.preview.draftId});
+    if(result.phase==='empty'){
+      // Re-enable the opener before removing the modal so it can restore focus.
+      // The action's busy ref stays guarded until its finally block completes.
+      setWorking(false);setState(result);setOpen(false);
+      notify({text:result.message||'暂无新增可上报诊断记录',error:false});return;
+    }
+    setState(result);
     if(result.phase==='sent')notify({text:`错误日志上报成功；新增 ${result.receipt?.acceptedErrors} 条，重复 ${result.receipt?.duplicateErrors} 条。可在“最近上报”查看。`,error:false});
   }
   return <>
@@ -61,7 +68,7 @@ export function ErrorReport({disabled,notify}:{disabled:boolean;notify:(notice:{
       <div className="error-report-card">
         <div className="report-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 8v5m0 3h.01M3 18 10 5a2.2 2.2 0 0 1 4 0l7 13a2 2 0 0 1-2 3H5a2 2 0 0 1-2-3Z"/></svg></div>
         <h2>{state.phase==='sent'?'错误日志已上报':'上报错误日志'}</h2>
-        <p className="report-intro">发送失败记录与数值统计摘要，帮助比较成功率、超时和断流。仅在确认后上传。</p>
+        <p className="report-intro">发送新增失败记录与变化的数值统计。确认后会排除服务器已收录的内容。</p>
         {state.phase==='prepared'&&!state.preview.retryExisting&&(state.preview.summaryRequests??0)>0&&<label className="report-summary-only"><input type="checkbox" checked={state.preview.errorCount===0} disabled={working} onChange={e=>void action(()=>prepare(e.target.checked))}/>仅上报统计摘要</label>}
         {state.preview.retryExisting&&<p>继续重试原报告，内容与上次上传保持一致。</p>}
         <dl className="report-facts"><dt>错误记录</dt><dd>{state.preview.errorCount} 条</dd><dt>统计覆盖请求</dt><dd>{state.preview.summaryRequests ?? 0} 条{state.preview.summaryPartial ? " · 覆盖不完整" : ""}</dd><dt>筛选时间</dt><dd>{date(state.preview.rangeFrom)} 至 {date(state.preview.rangeTo)}</dd><dt>压缩大小</dt><dd>{(state.preview.compressedBytes/1024).toFixed(1)} KiB</dd><dt>接收位置</dt><dd>{new URL(state.preview.destination).host}</dd></dl>

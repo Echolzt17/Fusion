@@ -5,21 +5,48 @@ use std::collections::HashMap;
 /// subscription. Server-side references, compaction and unfinished tools cannot.
 /// This projection exists only for the lifetime of the incoming request.
 pub(super) fn project(v: &Value) -> Option<Value> {
+    project_checked(v).ok()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BlockReason {
+    ServerReference,
+    MissingHistory,
+    NotNewUserTurn,
+    EncryptedHistory,
+    UnsupportedControl,
+    UnsupportedContent,
+    IncompleteTools,
+    UnsupportedItem,
+}
+
+pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReason> {
     if ["previous_response_id", "conversation"].iter().any(|k| !v[*k].is_null()) {
-        return None;
+        return Err(BlockReason::ServerReference);
     }
-    let input = v["input"].as_array()?;
+    // Responses accepts a string as a complete user input. Normalize it before
+    // deciding whether the request may use a soft chat preference, just as the
+    // gateway does for the upstream wire body.
+    let normalized = v["input"].as_str().map(|text| vec![
+        json!({"role":"user","content":[{"type":"input_text","text":text}]})
+    ]);
+    let input = normalized.as_ref().or_else(|| v["input"].as_array())
+        .ok_or(BlockReason::MissingHistory)?;
     let latest = input.iter().rev().find(|item| !matches!(item["type"].as_str(),
-        Some("additional_tools" | "configuration_update")))?;
+        Some("additional_tools" | "configuration_update")))
+        .ok_or(BlockReason::MissingHistory)?;
     if latest["role"] != "user" {
-        return None;
+        return Err(BlockReason::NotNewUserTurn);
     }
     let mut calls = HashMap::new();
     let mut output = Vec::with_capacity(input.len());
     for item in input {
         let mut item = item.clone();
         let kind = item["type"].as_str().unwrap_or("message");
-        if kind != "reasoning" && !item["encrypted_content"].is_null() { return None; }
+        if kind != "reasoning" && !item["encrypted_content"].is_null()
+            || !item["encrypted_function_args"].is_null() {
+            return Err(BlockReason::EncryptedHistory);
+        }
         match kind {
             "reasoning" => continue,
             "configuration_update" => {
@@ -27,11 +54,11 @@ pub(super) fn project(v: &Value) -> Option<Value> {
                 // this position in history. It is not a user turn or an opaque
                 // model response. Preserve exactly the schema verified on the
                 // installed engine; unknown control variants stay hard-pinned.
-                let control = item.as_object()?;
-                let reasoning = item["reasoning"].as_object()?;
+                let control = item.as_object().ok_or(BlockReason::UnsupportedControl)?;
+                let reasoning = item["reasoning"].as_object().ok_or(BlockReason::UnsupportedControl)?;
                 if control.len() != 2 || reasoning.len() != 1
                     || !reasoning["effort"].as_str().is_some_and(|effort| !effort.is_empty()) {
-                    return None;
+                    return Err(BlockReason::UnsupportedControl);
                 }
                 output.push(item);
                 continue;
@@ -40,40 +67,75 @@ pub(super) fn project(v: &Value) -> Option<Value> {
             // than top-level tools. These are schemas, not account references;
             // never interpret property names inside a schema as response ids.
             "additional_tools" => {
-                if !item["tools"].is_array() || item["role"] != "developer" { return None; }
+                if !item["tools"].is_array() || item["role"] != "developer" {
+                    return Err(BlockReason::UnsupportedControl);
+                }
                 output.push(item);
                 continue;
             }
             "message" => {
                 if !matches!(item["role"].as_str(), Some("user" | "assistant" | "system" | "developer"))
-                    || !portable_content(&item["content"]) { return None; }
+                    || !portable_content(&item["content"]) {
+                    return Err(BlockReason::UnsupportedContent);
+                }
+            }
+            "agent_message" => {
+                let content = item["content"].as_array().ok_or(BlockReason::UnsupportedContent)?;
+                if content.iter().any(|part| part["type"] == "encrypted_content"
+                    || !part["encrypted_content"].is_null()) {
+                    return Err(BlockReason::EncryptedHistory);
+                }
+                // The native protocol distinguishes plaintext agent messages
+                // from encrypted ones. Keep the explicit sender, recipient and
+                // every text part; never flatten an encrypted agent handoff.
+                if !["author", "recipient"].iter().all(|key|
+                    item[*key].as_str().is_some_and(|value| !value.is_empty()))
+                    || content.is_empty()
+                    || !content.iter().all(|part| part["type"] == "input_text" && part["text"].is_string()) {
+                    return Err(BlockReason::UnsupportedContent);
+                }
             }
             "function_call" | "custom_tool_call" => {
-                let id = item["call_id"].as_str().filter(|s| !s.is_empty())?.to_owned();
+                let id = item["call_id"].as_str().filter(|s| !s.is_empty())
+                    .ok_or(BlockReason::IncompleteTools)?.to_owned();
                 if calls.insert(id, kind.to_owned()).is_some()
                     || item["name"].as_str().is_none()
                     || if kind == "function_call" { item["arguments"].as_str().is_none() }
-                       else { item["input"].as_str().is_none() } { return None; }
+                       else { item["input"].as_str().is_none() } {
+                    return Err(BlockReason::IncompleteTools);
+                }
             }
             "function_call_output" | "custom_tool_call_output" => {
                 let expected = if kind == "function_call_output" { "function_call" } else { "custom_tool_call" };
-                let id = item["call_id"].as_str()?;
-                if calls.remove(id).as_deref() != Some(expected) || !portable_content(&item["output"]) {
-                    return None;
+                let named_external = kind == "function_call_output" && item["call_id"].is_null()
+                    && ["name", "namespace"].iter().all(|key|
+                        item[*key].as_str().is_some_and(|value| !value.is_empty()));
+                // The native ResponseItem schema also carries completed,
+                // explicitly named external tool results without call_id.
+                // Keep both routing fields and the full readable result;
+                // unnamed orphan outputs still require a matching call.
+                if !named_external {
+                    let id = item["call_id"].as_str().ok_or(BlockReason::IncompleteTools)?;
+                    if calls.remove(id).as_deref() != Some(expected) {
+                        return Err(BlockReason::IncompleteTools);
+                    }
+                }
+                if !portable_content(&item["output"]) {
+                    return Err(BlockReason::UnsupportedContent);
                 }
             }
-            _ => return None,
+            _ => return Err(BlockReason::UnsupportedItem),
         }
-        let object = item.as_object_mut()?;
+        let object = item.as_object_mut().ok_or(BlockReason::UnsupportedItem)?;
         // Item ids are upstream references; call_id is the explicit local pair.
         object.remove("id");
         object.remove("encrypted_content");
         output.push(item);
     }
-    if !calls.is_empty() { return None; }
+    if !calls.is_empty() { return Err(BlockReason::IncompleteTools); }
     let mut projected = v.clone();
     projected["input"] = Value::Array(output);
-    Some(projected)
+    Ok(projected)
 }
 
 fn portable_content(value: &Value) -> bool {
@@ -114,7 +176,7 @@ pub(super) fn sanitize_rolled_history(ctx: &Context, h: &mut HeaderMap, v: &mut 
             }
         }
         if matches!(item["type"].as_str().unwrap_or("message"),
-            "message" | "function_call" | "function_call_output" | "custom_tool_call" | "custom_tool_call_output") {
+            "message" | "agent_message" | "function_call" | "function_call_output" | "custom_tool_call" | "custom_tool_call_output") {
             if let Some(object) = item.as_object_mut() { object.remove("id"); }
         }
         keep.push(item);
@@ -141,6 +203,116 @@ pub(super) fn chat_preference(ctx: &Context, h: &HeaderMap, v: &Value) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_user_input_is_projected_before_routing_without_losing_options() {
+        for text in ["", "public user task"] {
+            let source = json!({"input":text,"model":"public-model","instructions":"public rules",
+                "reasoning":{"effort":"high"},"stream":false});
+            let projected = project_checked(&source).unwrap();
+            let mut expected = source.clone();
+            expected["input"] = json!([{"role":"user","content":[{"type":"input_text","text":text}]}]);
+            assert_eq!(projected, expected);
+            assert_eq!(source["input"], text, "projection does not rewrite the incoming value");
+        }
+        assert_eq!(project_checked(&json!({"input":"task","previous_response_id":"old-response"})),
+            Err(BlockReason::ServerReference));
+    }
+
+    #[test]
+    fn encrypted_function_arguments_are_never_projected_to_another_account() {
+        let mut source = json!({"input":[
+            {"type":"function_call","call_id":"read","name":"read","arguments":"{}"},
+            {"type":"function_call_output","call_id":"read","output":"public result"},
+            {"role":"user","content":"next task"}
+        ]});
+        assert!(project_checked(&source).is_ok());
+        source["input"][0]["encrypted_function_args"] = Value::Null;
+        assert!(project_checked(&source).is_ok());
+        for encrypted in [json!([]), json!(["PUBLIC_FAKE_ENCRYPTED_ARGUMENTS"])] {
+            source["input"][0]["encrypted_function_args"] = encrypted;
+            assert_eq!(project_checked(&source), Err(BlockReason::EncryptedHistory));
+            assert!(project(&source).is_none());
+        }
+    }
+
+    #[test]
+    fn plaintext_agent_messages_preserve_native_routing_and_encrypted_messages_block_rollover() {
+        let message = json!({"type":"agent_message","id":"public-agent-message","author":"public-agent-a",
+            "recipient":"public-agent-b","content":[
+                {"type":"input_text","text":"public result"},
+                {"type":"input_text","text":"public followup"}],
+            "internal_chat_message_metadata_passthrough":{"turn_id":"public-agent-turn"}});
+        let mut source = json!({"input":[message,{"role":"user","content":"next user task"}]});
+        let projected = project_checked(&source).unwrap();
+        let mut expected = message.clone();
+        expected.as_object_mut().unwrap().remove("id");
+        assert_eq!(projected["input"][0], expected);
+        assert_eq!(source["input"][0]["id"], "public-agent-message");
+        source["input"][0]["content"].as_array_mut().unwrap().push(
+            json!({"type":"encrypted_content","encrypted_content":"PUBLIC_FAKE_AGENT_CIPHERTEXT"}));
+        assert_eq!(project_checked(&source), Err(BlockReason::EncryptedHistory));
+        source["input"][0]["content"] = json!([{"type":"unknown_agent_content","text":"public"}]);
+        assert_eq!(project_checked(&source), Err(BlockReason::UnsupportedContent));
+        source["input"][0]["content"] = message["content"].clone();
+        source["input"][0]["recipient"] = Value::Null;
+        assert_eq!(project_checked(&source), Err(BlockReason::UnsupportedContent));
+    }
+
+    #[test]
+    fn named_external_tool_outputs_without_call_id_keep_their_complete_native_structure() {
+        let output = json!({"type":"function_call_output","id":"public-external-output",
+            "name":"public_fixture_read","namespace":"functions","output":[
+                {"type":"input_text","text":"public external result"}]});
+        let source = json!({"input":[output,{"role":"user","content":"next user task"}]});
+        let projected = project_checked(&source).unwrap();
+        let mut expected = output.clone(); expected.as_object_mut().unwrap().remove("id");
+        assert_eq!(projected["input"][0], expected);
+        for (field, value) in [
+            ("name", Value::Null), ("namespace", json!("")), ("call_id", json!("")),
+            ("call_id", json!("unmatched-call")),
+        ] {
+            let mut invalid = source.clone(); invalid["input"][0][field] = value;
+            assert_eq!(project_checked(&invalid), Err(BlockReason::IncompleteTools));
+        }
+        let mut encrypted = source.clone();
+        encrypted["input"][0]["encrypted_content"] = json!("PUBLIC_FAKE_ENCRYPTED_OUTPUT");
+        assert_eq!(project_checked(&encrypted), Err(BlockReason::EncryptedHistory));
+        let mut incomplete = source.clone();
+        incomplete["input"].as_array_mut().unwrap().insert(0,
+            json!({"type":"function_call","call_id":"pending","name":"run","arguments":"{}"}));
+        assert_eq!(project_checked(&incomplete), Err(BlockReason::IncompleteTools));
+    }
+
+    #[test]
+    fn blocked_projection_reports_structure_without_guessing_completed_tool_support() {
+        for (source, reason) in [
+            (json!({"input":[]}), BlockReason::MissingHistory),
+            (json!({"input":[{"role":"user","content":"task"},
+                {"type":"reasoning","encrypted_content":"PUBLIC_FAKE_CURRENT_REASONING"}]}), BlockReason::NotNewUserTurn),
+            (json!({"input":[{"role":"user","content":[{"type":"input_file","file_id":"public-file"}]}]}),
+                BlockReason::UnsupportedContent),
+            (json!({"input":[{"type":"function_call","call_id":"run","name":"run","arguments":"{}"},
+                {"role":"user","content":"next task"}]}), BlockReason::IncompleteTools),
+            (json!({"input":[{"role":"user","content":"task"},
+                {"type":"configuration_update","reasoning":{"effort":"high","unknown":"control"}}]}),
+                BlockReason::UnsupportedControl),
+        ] {
+            assert_eq!(project_checked(&source), Err(reason));
+        }
+        for item in [
+            json!({"type":"web_search_call","id":"public-search","status":"completed",
+                "action":{"type":"search","query":"public query"}}),
+            json!({"type":"local_shell_call","call_id":"public-shell","status":"completed",
+                "action":{"type":"exec","command":["public-fixture"]}}),
+            json!({"type":"tool_search_output","call_id":"public-tools","status":"completed",
+                "execution":"client","tools":[]}),
+        ] {
+            assert_eq!(project_checked(&json!({"input":[item,{"role":"user","content":"next task"}]})),
+                Err(BlockReason::UnsupportedItem));
+        }
+    }
+
     #[test]
     fn native_configuration_update_is_preserved_without_becoming_a_user_turn() {
         let control = json!({"type":"configuration_update","reasoning":{"effort":"xhigh"}});
