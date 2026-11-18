@@ -4,6 +4,7 @@ use std::collections::HashMap;
 /// A new local user turn may carry its complete, readable history to another
 /// subscription. Server-side references, compaction and unfinished tools cannot.
 /// This projection exists only for the lifetime of the incoming request.
+#[cfg(test)]
 pub(super) fn project(v: &Value) -> Option<Value> {
     project_checked(v).ok()
 }
@@ -20,18 +21,20 @@ pub(super) enum BlockReason {
     UnsupportedItem,
 }
 
-pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReason> {
+#[cfg(test)]
+fn project_checked(v: &Value) -> std::result::Result<Value, BlockReason> {
+    check(v)?;
+    let mut projected = v.clone();
+    apply_projection(&mut projected);
+    Ok(projected)
+}
+
+pub(super) fn check(v: &Value) -> std::result::Result<(), BlockReason> {
     if ["previous_response_id", "conversation"].iter().any(|k| !v[*k].is_null()) {
         return Err(BlockReason::ServerReference);
     }
-    // Responses accepts a string as a complete user input. Normalize it before
-    // deciding whether the request may use a soft chat preference, just as the
-    // gateway does for the upstream wire body.
-    let normalized = v["input"].as_str().map(|text| vec![
-        json!({"role":"user","content":[{"type":"input_text","text":text}]})
-    ]);
-    let input = normalized.as_ref().or_else(|| v["input"].as_array())
-        .ok_or(BlockReason::MissingHistory)?;
+    if v["input"].is_string() { return Ok(()); }
+    let input = v["input"].as_array().ok_or(BlockReason::MissingHistory)?;
     let latest = input.iter().rev().find(|item| !matches!(item["type"].as_str(),
         Some("additional_tools" | "configuration_update")))
         .ok_or(BlockReason::MissingHistory)?;
@@ -39,11 +42,10 @@ pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReas
         return Err(BlockReason::NotNewUserTurn);
     }
     let mut calls = HashMap::new();
-    let mut output = Vec::with_capacity(input.len());
     for item in input {
-        let mut item = item.clone();
         let kind = item["type"].as_str().unwrap_or("message");
-        if kind != "reasoning" && !item["encrypted_content"].is_null()
+        if !item["encrypted_content"].is_null()
+                && (kind != "reasoning" || !item["encrypted_content"].is_string())
             || !item["encrypted_function_args"].is_null() {
             return Err(BlockReason::EncryptedHistory);
         }
@@ -60,7 +62,6 @@ pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReas
                     || !reasoning["effort"].as_str().is_some_and(|effort| !effort.is_empty()) {
                     return Err(BlockReason::UnsupportedControl);
                 }
-                output.push(item);
                 continue;
             }
             // Responses Lite carries native tool declarations in input rather
@@ -70,7 +71,6 @@ pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReas
                 if !item["tools"].is_array() || item["role"] != "developer" {
                     return Err(BlockReason::UnsupportedControl);
                 }
-                output.push(item);
                 continue;
             }
             "message" => {
@@ -97,8 +97,8 @@ pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReas
             }
             "function_call" | "custom_tool_call" => {
                 let id = item["call_id"].as_str().filter(|s| !s.is_empty())
-                    .ok_or(BlockReason::IncompleteTools)?.to_owned();
-                if calls.insert(id, kind.to_owned()).is_some()
+                    .ok_or(BlockReason::IncompleteTools)?;
+                if calls.insert(id, kind).is_some()
                     || item["name"].as_str().is_none()
                     || if kind == "function_call" { item["arguments"].as_str().is_none() }
                        else { item["input"].as_str().is_none() } {
@@ -116,7 +116,7 @@ pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReas
                 // unnamed orphan outputs still require a matching call.
                 if !named_external {
                     let id = item["call_id"].as_str().ok_or(BlockReason::IncompleteTools)?;
-                    if calls.remove(id).as_deref() != Some(expected) {
+                    if calls.remove(id) != Some(expected) {
                         return Err(BlockReason::IncompleteTools);
                     }
                 }
@@ -126,22 +126,38 @@ pub(super) fn project_checked(v: &Value) -> std::result::Result<Value, BlockReas
             }
             _ => return Err(BlockReason::UnsupportedItem),
         }
-        let object = item.as_object_mut().ok_or(BlockReason::UnsupportedItem)?;
-        // Item ids are upstream references; call_id is the explicit local pair.
-        object.remove("id");
-        object.remove("encrypted_content");
-        output.push(item);
     }
     if !calls.is_empty() { return Err(BlockReason::IncompleteTools); }
-    let mut projected = v.clone();
-    projected["input"] = Value::Array(output);
-    Ok(projected)
+    Ok(())
+}
+
+/// Apply only after checking both the input structure and local ownership.
+pub(super) fn apply_projection(v: &mut Value) {
+    if let Some(text) = v["input"].as_str() {
+        v["input"] = json!([{"role":"user","content":[{"type":"input_text","text":text}]}]);
+        return;
+    }
+    if let Some(input) = v["input"].as_array_mut() {
+        input.retain_mut(|item| {
+            match item["type"].as_str() {
+                Some("reasoning") => return false,
+                Some("configuration_update" | "additional_tools") => return true,
+                _ => {}
+            }
+            if let Some(item) = item.as_object_mut() {
+                // Item ids belong to the upstream account; call_id pairs local tools.
+                item.remove("id");
+                item.remove("encrypted_content");
+            }
+            true
+        });
+    }
 }
 
 fn portable_content(value: &Value) -> bool {
     if value.is_string() { return true; }
     let Some(parts) = value.as_array() else { return false; };
-    parts.iter().all(|part| match part["type"].as_str() {
+    parts.iter().all(|part| part["encrypted_content"].is_null() && match part["type"].as_str() {
         Some("input_text" | "output_text" | "text") => part["text"].is_string(),
         Some("input_image") => part["file_id"].is_null()
             && part["image_url"].as_str().is_some_and(|s| s.starts_with("data:image/")),
@@ -234,6 +250,15 @@ mod tests {
             assert_eq!(project_checked(&source), Err(BlockReason::EncryptedHistory));
             assert!(project(&source).is_none());
         }
+    }
+
+    #[test]
+    fn unknown_reasoning_cipher_shape_is_never_removed_during_rollover() {
+        let request = json!({"input":[
+            {"type":"reasoning","encrypted_content":{"payload":"PUBLIC UNKNOWN CIPHERTEXT"}},
+            {"role":"user","content":"public next turn"}
+        ]});
+        assert_eq!(project_checked(&request), Err(BlockReason::EncryptedHistory));
     }
 
     #[test]

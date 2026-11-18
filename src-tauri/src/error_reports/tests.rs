@@ -49,6 +49,9 @@ fn serve_once(status: u16, reply: impl FnOnce(&[u8])->Vec<u8> + Send + 'static) 
                 Err(error)=>panic!("local test server: {error}"),
             }
         };
+        // Winsock can give the accepted socket the listener's nonblocking mode.
+        // The fixture reads a complete request under an explicit deadline.
+        stream.set_nonblocking(false).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let mut request=Vec::new();let (header_end,len)=loop {
             let mut buffer=[0;4096];let count=stream.read(&mut buffer).unwrap();assert!(count>0);

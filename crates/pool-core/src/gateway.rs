@@ -406,7 +406,7 @@ impl NetworkFailure {
         Self { code: if reading { "upstream_read_timeout" } else { "upstream_header_timeout" },
             stage, kind: Some(NetworkErrorKind::Timeout),
             message: match stage {
-                FailureStage::Connect => "建立上游连接超时；未收到上游响应，执行状态未确认，未自动重放",
+                FailureStage::Connect => "建立上游连接超时；业务请求尚未发送",
                 FailureStage::ResponseRead => "读取上游响应超时；执行状态未确认，未自动重放",
                 _ => "等待上游响应头超时；执行状态未确认，未自动重放",
             }.into() }
@@ -418,8 +418,12 @@ impl NetworkFailure {
         if error.is_timeout() { return Self::timeout(stage) }
         let kind = NetworkErrorKind::classify(error);
         Self { code: if reading { "read_error" } else { "network_error" }, stage, kind: Some(kind),
-            message: format!("{}（{}）；执行状态未确认，未回退直连、未自动重放请求",
-                if reading { "读取上游响应失败" } else { "上游请求失败" }, kind.description()) }
+            message: if stage == FailureStage::Connect {
+                format!("无法建立上游连接（{}）；业务请求尚未发送", kind.description())
+            } else {
+                format!("{}（{}）；执行状态未确认，未自动重放请求",
+                    if reading { "读取上游响应失败" } else { "上游请求失败" }, kind.description())
+            } }
     }
 }
 fn response_type(r: &reqwest::Response) -> ResponseType {
@@ -489,7 +493,7 @@ struct Audit {
     start: Instant,
     status: String,
     advice: String,
-    authorization_failures: Vec<String>,
+    excluded_accounts: Vec<String>,
     usage: Option<crate::usage::TokenUsage>,
     transport: transport::Telemetry,
     retry_client: Option<reqwest::Client>,
@@ -529,7 +533,7 @@ impl Audit {
             start: Instant::now(),
             status: "cancelled".into(),
             advice: "请求被客户端取消或服务停止；上游任务是否停止无法保证，未自动重放".into(),
-            authorization_failures: Vec::new(),
+            excluded_accounts: Vec::new(),
             usage: None,
             transport: Default::default(),
             retry_client: None,
@@ -750,6 +754,13 @@ struct ChatRouting {
     keys: Vec<String>,
     preferred: Option<String>,
 }
+const MAX_ROLLOVER_ACCOUNTS: usize = 8;
+
+fn has_rollover_candidate(a: &Audit) -> bool {
+    a.excluded_accounts.len() < MAX_ROLLOVER_ACCOUNTS
+        && a.ctx.accounts.store.accounts().is_ok_and(|accounts| accounts.iter().any(|account|
+            !a.excluded_accounts.contains(&account.id) && a.ctx.scheduler.available(account)))
+}
 fn unavailable_advice(a: &Audit, message: &str) -> String {
     if !message.starts_with("原会话账号不可用") { return message.to_owned(); }
     use crate::diagnostics::RoutingDecision as Routing;
@@ -814,12 +825,12 @@ async fn prepare_routed(
     let (lease, token) = loop {
         a.phase("catalog_queue");
         let tracking = a.tracking.clone();
-        let authorization_failures = a.authorization_failures.clone();
+        let excluded_accounts = a.excluded_accounts.clone();
         let acquire = async {
             if a.operation == "models" {
                 scheduler.acquire_catalog(pin.as_deref()).await
             } else if routing.is_some() {
-                scheduler.acquire_portable_excluding_observed(pin.as_deref(), &authorization_failures, selection_deadline, image, move |phase| {
+                scheduler.acquire_portable_excluding_observed(pin.as_deref(), &excluded_accounts, selection_deadline, image, move |phase| {
                     if let Some(request) = &tracking {
                         request.phase(match phase { QueuePhase::Capacity => "queued", QueuePhase::Cooldown => "cooldown" });
                     }
@@ -866,14 +877,11 @@ async fn prepare_routed(
         let token = match token_result {
             Ok(t) => t.access_token,
             Err(e) => {
-                a.authorization_failures.push(lease.account.id.clone());
+                a.excluded_accounts.push(lease.account.id.clone());
                 // No business request was sent. For a verified readable new turn,
                 // try each subscription at most once, without replaying its token
                 // refresh or persisting transient failures as account health.
-                let has_backup = routing.is_some() && a.authorization_failures.len() < 8
-                    && a.ctx.accounts.store.accounts().is_ok_and(|accounts| accounts.iter().any(|account|
-                        !a.authorization_failures.contains(&account.id) && scheduler.available(account)));
-                if has_backup {
+                if routing.is_some() && has_rollover_candidate(a) {
                     drop(lease);
                     continue;
                 }
@@ -913,7 +921,7 @@ async fn prepare_routed(
     Ok((lease, token))
 }
 async fn prepare_response(
-    a: &mut Audit, h: &mut HeaderMap, v: &mut Value,
+    a: &mut Audit, h: &mut HeaderMap, v: &mut Value, require_portable: bool,
 ) -> std::result::Result<(Lease, String), Box<Response>> {
     if let Err(e) = portable::sanitize_rolled_history(&a.ctx, h, v) {
         return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e)));
@@ -921,9 +929,9 @@ async fn prepare_response(
     // Only a complete new user turn can use a soft chat preference. A tool
     // continuation, image turn, compacted history or server reference keeps its
     // original hard affinity. Unknown input is never made portable by guessing.
-    let projection = portable::project_checked(v);
+    let portability = portable::check(v);
     use crate::diagnostics::RoutingDecision as Routing;
-    a.diagnostic.routing = Some(match projection.as_ref().err() {
+    a.diagnostic.routing = Some(match portability.err() {
         None => Routing::Portable,
         Some(portable::BlockReason::ServerReference) => Routing::ServerReference,
         Some(portable::BlockReason::MissingHistory) => Routing::MissingHistory,
@@ -939,23 +947,33 @@ async fn prepare_response(
         ids.iter().filter(|key| key.starts_with("turn:")).all(|key|
             a.ctx.accounts.store.binding(key).is_ok_and(|account| account.is_none()))
     });
-    let can_switch = projection.is_ok() && unbound_turn;
-    if projection.is_ok() && !unbound_turn { a.diagnostic.routing = Some(Routing::BoundTurn); }
-    if !can_switch { return prepare(a, h, v).await; }
+    let has_reference = continuity::has_account_reference(h, v);
+    let can_switch = portability.is_ok() && unbound_turn && !has_reference;
+    if has_reference { a.diagnostic.routing = Some(Routing::ServerReference); }
+    if !has_reference && portability.is_ok() && !unbound_turn { a.diagnostic.routing = Some(Routing::BoundTurn); }
     // A readable projection may omit known old reasoning, but it must never
     // turn unowned ciphertext from imported/unknown history into a portable
     // request by silently dropping it.
-    if opaque_keys(&v["input"]).iter().any(|key|
+    if can_switch && opaque_keys(&v["input"]).iter().any(|key|
         !a.ctx.accounts.store.binding(key).is_ok_and(|owner| owner.is_some())) {
         a.diagnostic.routing = Some(Routing::EncryptedHistory);
-        return prepare(a, h, v).await;
     }
-    let (keys, preferred) = match portable::chat_preference(&a.ctx, h, v) {
-        Ok(state) => state,
-        Err(e) => return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e))),
+    let (keys, preferred) = if a.diagnostic.routing == Some(Routing::Portable) {
+        match portable::chat_preference(&a.ctx, h, v) {
+            Ok(state) => state,
+            Err(e) => return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e))),
+        }
+    } else {
+        (Vec::new(), None)
     };
-    if keys.is_empty() {
+    if a.diagnostic.routing == Some(Routing::Portable) && keys.is_empty() {
         a.diagnostic.routing = Some(Routing::MissingChatIdentity);
+    }
+    if a.diagnostic.routing != Some(Routing::Portable) {
+        if require_portable {
+            return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable",
+                "等待备用账号时会话归属已变化，本次未再次发送")));
+        }
         return prepare(a, h, v).await;
     }
     let route = ChatRouting { keys, preferred };
@@ -964,7 +982,7 @@ async fn prepare_response(
     let foreign_state = continuity::required(h, v).iter().any(|key|
         !a.ctx.accounts.store.binding(key).is_ok_and(|bound| bound.as_deref() == Some(account.as_str())));
     if route.preferred.as_deref().is_some_and(|old| old != account) || foreign_state {
-        *v = projection.expect("portable projection was checked");
+        portable::apply_projection(v);
         h.remove("x-codex-turn-state");
     }
     // A turn becomes hard-bound only after an upstream response is accepted.
@@ -1320,7 +1338,7 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
     }
     let mut replay = match native_claim(&mut a, &h, &v) { Ok(claim) => claim, Err(response) => return *response };
     let stream = v["stream"].as_bool().unwrap_or(false);
-    let (mut lease, mut t) = match prepare_response(&mut a, &mut h, &mut v).await {
+    let (mut lease, mut t) = match prepare_response(&mut a, &mut h, &mut v, false).await {
         Ok(v) => v,
         Err(r) => { release_claim(&a.ctx, replay.as_ref()); return *r; },
     };
@@ -1331,12 +1349,8 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
     }
     let turn_keys = continuity::identities(&h, &v).unwrap_or_default().into_iter()
         .filter(|key| key.starts_with("turn:")).collect::<Vec<_>>();
-    let portable_attempt = portable::project(&v).is_some()
-        && turn_keys.iter().all(|key| a.ctx.accounts.store.binding(key).is_ok_and(|owner| owner.is_none()));
-    let max_accounts = a.ctx.accounts.store.accounts().map(|accounts| accounts.len().min(8)).unwrap_or(1);
-    let mut tried = std::collections::HashSet::new();
+    let portable_attempt = a.diagnostic.routing == Some(crate::diagnostics::RoutingDecision::Portable);
     let r = loop {
-        tried.insert(lease.account.id.clone());
         let r = match request(&mut a, &lease, &t, &h, reqwest::Method::POST, "/responses").await {
             Ok(r) => r.header("accept", "text/event-stream").json(&v),
             Err(e) => return a.network_error(e),
@@ -1345,7 +1359,12 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
         if let Some(claim) = replay.as_mut() { claim.dispatched = true; }
         let r = match a.send(r, Duration::from_secs(180)).await {
             Ok(r) => r,
-            Err(e) => return a.network_error(e),
+            Err(e) => {
+                if e.stage == FailureStage::Connect {
+                    if let Some(claim) = replay.as_mut() { claim.dispatched = false; }
+                }
+                return a.network_error(e);
+            }
         };
         // HTTP 429 is an explicit refusal before output. Unlike a broken
         // connection, 5xx or failed SSE, it cannot have executed model tools.
@@ -1355,27 +1374,26 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
             // claim. A subsequent dispatch sets it again before sending.
             if let Some(claim) = replay.as_mut() { claim.dispatched = false; }
         }
-        if r.status() != StatusCode::TOO_MANY_REQUESTS || !portable_attempt || tried.len() >= max_accounts {
+        if r.status() != StatusCode::TOO_MANY_REQUESTS || !portable_attempt {
             break r;
         }
+        a.excluded_accounts.push(lease.account.id.clone());
+        if !has_rollover_candidate(&a) { break r; }
         let delay = r.headers().get("retry-after").and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<i64>().ok()).unwrap_or(60).clamp(1, 86400 * 7);
         let _ = a.ctx.accounts.mark_failure(&lease.account.id, 429, delay).await;
-        let alternative = a.ctx.accounts.store.accounts().is_ok_and(|accounts| accounts.iter()
-            .any(|account| !tried.contains(&account.id) && a.ctx.scheduler.available(account)));
-        if !alternative { break r; }
         drop(r);
         drop(lease);
         a.route_lease = None;
-        let next = match prepare_response(&mut a, &mut h, &mut v).await {
+        let next = match prepare_response(&mut a, &mut h, &mut v, true).await {
             Ok(next) => next,
             Err(response) => { release_claim(&a.ctx, replay.as_ref()); return *response; },
         };
         lease = next.0;
         t = next.1;
-        if tried.contains(&lease.account.id) {
-            return a.error(StatusCode::SERVICE_UNAVAILABLE, "account_unavailable", "备用账号当前不可用，未重复发送已尝试的账号");
-        }
+        // The report format describes one upstream send and its optional
+        // connector retry. Use the new account's transport and request size.
+        *a.transport.lock().unwrap() = Default::default();
     };
     drop(v);
     a.received(&r);

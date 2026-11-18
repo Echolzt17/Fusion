@@ -197,3 +197,50 @@ async fn quota_fallback_retains_authorization_exclusions_for_the_entire_request(
     assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("c"));
     gateway.abort(); up.abort(); token_server.abort();
 }
+
+#[tokio::test]
+async fn quota_refusal_stays_excluded_even_if_cooldown_clears_during_backup_auth() {
+    let (_dir, mut accounts) = fixture();
+    for id in ["a", "b", "c"] { add(&accounts, id); }
+    expire(&accounts, "b");
+    let store = accounts.store.clone();
+    let (token_base, token_server) = serve(Router::new().route("/token", post(move || {
+        let store = store.clone();
+        async move {
+            let mut original = store.account("a").unwrap();
+            assert!(original.cooldown_until > crate::now());
+            original.cooldown_until = 0;
+            store.save_account(&original).unwrap();
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }))).await;
+    Arc::get_mut(&mut accounts).unwrap().use_test_token_endpoint(format!("{token_base}/token"));
+    let chat = binding_key("thread", "clear-cooldown-chat");
+    accounts.store.bind(&chat, "a").unwrap();
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let captured = seen.clone();
+    let (upstream, up) = serve(Router::new().route("/responses", post(move |h: HeaderMap| {
+        let captured = captured.clone();
+        async move {
+            let account = h["chatgpt-account-id"].to_str().unwrap();
+            captured.lock().unwrap().push(account.to_owned());
+            if account == "chatgpt-a" {
+                (StatusCode::TOO_MANY_REQUESTS, [("content-type", "text/event-stream")], String::new())
+            } else {
+                (StatusCode::OK, [("content-type", "text/event-stream")], completion())
+            }
+        }
+    }))).await;
+    let context = ctx(accounts.clone(), upstream);
+    context.scheduler.select_account(Some("b".into())).unwrap();
+    let (base, gateway) = serve(router(context)).await;
+    let response = reqwest::Client::new().post(format!("{base}/v1/responses"))
+        .header("x-fusion-client-key", "test-key")
+        .header("x-codex-turn-metadata", metadata("clear-cooldown-chat", "clear-cooldown-turn"))
+        .json(&json!({"input":"public fixture task","stream":false})).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["chatgpt-a", "chatgpt-c"]);
+    assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("c"));
+    gateway.abort(); up.abort(); token_server.abort();
+}

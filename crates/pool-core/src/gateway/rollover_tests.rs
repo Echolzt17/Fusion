@@ -57,6 +57,9 @@ async fn string_user_turn_rolls_on_exhaustion_and_429_and_cannot_be_replayed_as_
         let logs = accounts.store.logs().unwrap();
         let routed = logs.iter().find(|log| log.status == "success").unwrap();
         assert_eq!(routed.diagnostic.as_ref().unwrap().routing, Some(crate::diagnostics::RoutingDecision::Portable));
+        let transport = routed.diagnostic.as_ref().unwrap().execution.as_ref().unwrap().transport.as_ref().unwrap();
+        assert!(transport.valid());
+        assert_eq!(transport.attempts.len(), 1, "report describes the account that completed the request");
         assert!(!serde_json::to_string(&logs).unwrap().contains("PUBLIC STRING TURN"));
         gw.abort(); up.abort();
     }
@@ -106,6 +109,33 @@ async fn quota_refusal_then_backup_queue_cancellation_releases_only_the_unsent_c
     assert_eq!(retry.status(), StatusCode::OK); retry.bytes().await.unwrap();
     assert_eq!(*seen.lock().unwrap(), vec!["chatgpt-a", "chatgpt-b"]);
     gw.abort(); up.abort();
+}
+
+#[tokio::test]
+async fn top_level_image_reference_keeps_the_chat_on_its_owner_after_quota_refusal() {
+    let (_dir, accounts) = fixture();
+    add(&accounts, "a"); add(&accounts, "b");
+    let chat = binding_key("thread", "referenced-image-chat");
+    accounts.store.bind(&chat, "a").unwrap();
+    accounts.store.bind(&binding_key("image_file", "public-fixture-image"), "a").unwrap();
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let captured = seen.clone();
+    let (upstream, up) = serve(Router::new().route("/responses", post(move |h: HeaderMap| {
+        let captured = captured.clone();
+        async move {
+            captured.lock().unwrap().push(h["chatgpt-account-id"].to_str().unwrap().to_owned());
+            StatusCode::TOO_MANY_REQUESTS
+        }
+    }))).await;
+    let (base, gateway) = serve(router(ctx(accounts.clone(), upstream))).await;
+    let response = reqwest::Client::new().post(format!("{base}/v1/responses")).bearer_auth("test-key")
+        .header("x-codex-turn-metadata", turn("referenced-image-chat", "referenced-image-turn"))
+        .json(&json!({"input":"public fixture task","images":[{"file_id":"public-fixture-image"}],"stream":false}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(*seen.lock().unwrap(), ["chatgpt-a"]);
+    assert_eq!(accounts.store.binding(&chat).unwrap().as_deref(), Some("a"));
+    gateway.abort(); up.abort();
 }
 
 #[tokio::test]

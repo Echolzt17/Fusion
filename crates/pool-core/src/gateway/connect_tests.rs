@@ -1,6 +1,6 @@
 use super::tests::{ctx, serve};
 use super::*;
-use crate::tests::fixture;
+use crate::tests::{add, fixture};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -158,5 +158,58 @@ async fn sent_request_without_response_headers_and_http_rejections_are_never_rep
         }
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
         upstream.await.unwrap(); proxy.abort();
+    }
+}
+
+#[tokio::test]
+async fn native_replay_guard_releases_only_when_the_connector_proves_no_dispatch() {
+    for connected in [false, true] {
+        let (_dir, accounts) = fixture();
+        add(&accounts, "a");
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = socket.local_addr().unwrap();
+        let (reserved, upstream) = if connected {
+            let listener = socket.listen(1).unwrap();
+            let task = tokio::spawn(async move {
+                let (mut client, _) = listener.accept().await.unwrap();
+                let mut data = [0; 4096];
+                assert!(client.read(&mut data).await.unwrap() > 0);
+                client.shutdown().await.unwrap();
+                listener
+            });
+            (None, Some(task))
+        } else {
+            (Some(socket), None)
+        };
+        let (base, gateway) = serve(router(ctx(accounts, format!("http://{address}")))).await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let submit = || client.post(format!("{base}/v1/responses"))
+            .bearer_auth("test-key")
+            .header("x-codex-turn-metadata", r#"{"thread_id":"connect-fixture","turn_id":"public-turn"}"#)
+            .json(&json!({"input":"public fixture task","stream":false}));
+        let first = submit().send().await.unwrap();
+        assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+        let listener = if let Some(upstream) = upstream {
+            upstream.await.unwrap()
+        } else {
+            reserved.unwrap().listen(1).unwrap()
+        };
+        let hits = Arc::new(AtomicUsize::new(0));
+        let accepted = hits.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/responses", post(move || {
+                accepted.fetch_add(1, Ordering::SeqCst);
+                async {
+                    ([("content-type", "text/event-stream")],
+                     "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n")
+                }
+            }))).await.unwrap();
+        });
+        let second = submit().send().await.unwrap();
+        assert_eq!(second.status(), if connected { StatusCode::BAD_REQUEST } else { StatusCode::OK });
+        second.bytes().await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), usize::from(!connected));
+        server.abort(); gateway.abort();
     }
 }

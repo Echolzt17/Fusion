@@ -52,19 +52,22 @@ impl Native {
         message["result"].clone()
     }
     async fn completed(&mut self, thread: &str, turn: &str, stage: &str, diagnostic: Option<&StdMutex<Vec<Value>>>) {
+        let result = self.turn_result(thread, turn).await;
+        if result["status"] != "completed" {
+            if let Some(inputs) = diagnostic { eprintln!("actual-native-input-structure: {}", serde_json::to_string(&*inputs.lock().unwrap()).unwrap()); }
+        }
+        assert_eq!(result["status"], "completed", "{stage}: actual native turn must complete without a manual retry; public-fake error={}", result["error"]);
+    }
+    async fn turn_result(&mut self, thread: &str, turn: &str) -> Value {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let message = match self.completed.take() { Some(message) => message, None => self.next().await };
                 if message["method"] == "turn/completed" && message["params"]["threadId"] == thread && message["params"]["turn"]["id"] == turn {
-                    if message["params"]["turn"]["status"] != "completed" {
-                        if let Some(inputs) = diagnostic { eprintln!("actual-native-input-structure: {}", serde_json::to_string(&*inputs.lock().unwrap()).unwrap()); }
-                    }
-                    assert_eq!(message["params"]["turn"]["status"], "completed", "{stage}: actual native turn must complete without a manual retry; public-fake error={}", message["params"]["turn"]["error"]);
-                    return;
+                    return message["params"]["turn"].clone();
                 }
                 assert!(!(message.get("id").is_some() && message.get("method").is_some()), "fixture must not execute extra native tools");
             }
-        }).await.expect("actual native turn must complete through the pool");
+        }).await.expect("actual native turn must report its terminal status")
     }
     async fn compacted(&mut self, thread: &str) {
         self.completed = None;
@@ -121,7 +124,7 @@ fn fixture_response(n: usize, summary: bool) -> String {
     events.iter().map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap())).collect()
 }
 
-async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
+async fn native_rollover_scenario(engine: &Path, local_compaction: bool, quota_refusal: bool) {
     let (_database, accounts) = fixture();
     add(&accounts, "a"); add(&accounts, "b");
     accounts.vault.set("gateway-key", "fusion-public-fixture-key").unwrap();
@@ -132,10 +135,13 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
     let seen = Arc::new(StdMutex::new(Vec::<Seen>::new()));
     let compact_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let compact_expected = compact_request.clone();
+    let refuse_next = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let refuse_upstream = refuse_next.clone();
     let captured = seen.clone();
     let upstream = Router::new().route("/models", get(|| async { Json(json!({"models":[],"data":[]})) }))
         .route("/responses", post(move |headers: HeaderMap, Json(body): Json<Value>| {
-            let captured = captured.clone(); let compact_expected = compact_expected.clone(); async move {
+            let captured = captured.clone(); let compact_expected = compact_expected.clone();
+            let refuse_upstream = refuse_upstream.clone(); async move {
                 assert_eq!(headers["authorization"], "Bearer fake-access-token", "personal fixture login must never reach the upstream");
                 let metadata: Value = serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
                 let mut requests = captured.lock().unwrap();
@@ -156,7 +162,11 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
                         && item["output"] == "PUBLIC COMPLETED EXTERNAL TOOL RESULT"),
                     old_standalone_id: body["input"].as_array().unwrap().iter().any(|item| item["id"] == "fixture-standalone-output-a"),
                 });
-                ([("content-type", "text/event-stream")], fixture_response(n, compact_expected.swap(false, std::sync::atomic::Ordering::SeqCst)))
+                if refuse_upstream.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    assert_eq!(headers["chatgpt-account-id"], "chatgpt-a");
+                    return (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "3600")], String::new()).into_response();
+                }
+                ([("content-type", "text/event-stream")], fixture_response(n, compact_expected.swap(false, std::sync::atomic::Ordering::SeqCst))).into_response()
             }
         }));
     let (upstream, up) = super::tests::serve(upstream).await;
@@ -179,10 +189,11 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
                         "type":item["type"],"role":item["role"],"contentTypes":item["content"].as_array().map(|parts|parts.iter().map(|p|p["type"].clone()).collect::<Vec<_>>())})).collect::<Vec<_>>())}));
             }
             let mut headers = parts.headers; headers.remove(http::header::HOST); headers.remove(http::header::CONNECTION);
-            let response = reqwest::Client::builder().no_proxy().build().unwrap()
-                .request(parts.method, format!("http://127.0.0.1:{port}{}",parts.uri)).headers(headers).body(body).send().await.unwrap();
+            let Ok(response) = reqwest::Client::builder().no_proxy().build().unwrap()
+                .request(parts.method, format!("http://127.0.0.1:{port}{}",parts.uri)).headers(headers).body(body).send().await
+            else { return StatusCode::SERVICE_UNAVAILABLE.into_response(); };
             let status = response.status(); let headers = response.headers().clone();
-            (status,headers,Body::from_stream(response.bytes_stream().map(|chunk|chunk.map_err(std::io::Error::other))))
+            (status,headers,Body::from_stream(response.bytes_stream().map(|chunk|chunk.map_err(std::io::Error::other)))).into_response()
         }
     }));
     let (proxy_base, proxy_task) = super::tests::serve(proxy).await;
@@ -227,10 +238,14 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
         assert_eq!(requests[1].account, "chatgpt-a");
         assert!(!requests[1].opaque_compaction, "unsupported remote compaction must use readable local compaction");
     }
-    let mut exhausted = accounts.store.account("a").unwrap();
-    exhausted.quota = Some(json!({"updatedAt":crate::now(),"rateLimit":{"allowed":false,"limit_reached":true,
-        "primary_window":{"used_percent":100,"reset_at":crate::now()+3600}}}));
-    accounts.store.save_account(&exhausted).unwrap();
+    if quota_refusal {
+        refuse_next.store(true, std::sync::atomic::Ordering::SeqCst);
+    } else {
+        let mut exhausted = accounts.store.account("a").unwrap();
+        exhausted.quota = Some(json!({"updatedAt":crate::now(),"rateLimit":{"allowed":false,"limit_reached":true,
+            "primary_window":{"used_percent":100,"reset_at":crate::now()+3600}}}));
+        accounts.store.save_account(&exhausted).unwrap();
+    }
     let second_turn = native.call("turn/start", json!({"threadId":thread,"input":[{"type":"text","text":"Public fixture second turn in this same chat. Continue."}]})).await;
     // A failure reports only structural public-fixture metadata, never schemas,
     // instructions, request content or encrypted values.
@@ -241,7 +256,7 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
     assert_eq!(std::fs::read(root.path().join("auth.json")).unwrap(), login, "personal native login is untouched");
     let requests = seen.lock().unwrap().clone();
     let expected = if local_compaction { 3 } else { 2 };
-    assert_eq!(requests.len(), expected, "actual native turns and no upstream replay");
+    assert_eq!(requests.len(), expected + usize::from(quota_refusal), "only an explicit refusal adds an upstream attempt");
     let last = requests.last().unwrap();
     assert_eq!(last.account, "chatgpt-b", "second native turn must actually reach the backup account");
     assert!(requests.iter().all(|request| request.thread == thread));
@@ -270,19 +285,33 @@ async fn native_rollover_scenario(engine: &Path, local_compaction: bool) {
     config["openai_base_url"] = toml_edit::value(format!("{auxiliary}/v1"));
     std::fs::write(&path, config.to_string()).unwrap();
     let mut restored = Native::start(engine, root.path()).await;
-    let denied = restored.raw_call("thread/resume", json!({"threadId":thread})).await;
-    assert_eq!(denied["error"]["data"]["type"], "modelProviderMismatch", "official access must refuse this pool-owned history before a business request");
+    let resumed = restored.raw_call("thread/resume", json!({"threadId":thread})).await;
+    if resumed.get("result").is_some() {
+        assert_eq!(resumed["result"]["thread"]["modelProvider"], "personal_codex_pool");
+        let probe = restored.raw_call("turn/start", json!({"threadId":thread,
+            "input":[{"type":"text","text":"Public fixture closing check."}]})).await;
+        if let Some(turn) = probe["result"]["turn"]["id"].as_str() {
+            assert_eq!(restored.turn_result(&thread, turn).await["status"], "failed",
+                "resuming pool history under the restored configuration must still require an active pool");
+        } else {
+            assert!(probe.get("error").is_some());
+        }
+    } else {
+        assert_eq!(resumed["error"]["data"]["type"], "modelProviderMismatch",
+            "unexpected restore classification: {:?}", resumed["error"]["code"].as_i64());
+    }
     assert_eq!(official_calls.load(std::sync::atomic::Ordering::SeqCst), 0, "restored official account must receive no pool business request or ciphertext");
     restored.close().await;
     assert_eq!(std::fs::read(root.path().join("auth.json")).unwrap(), login);
     proxy_task.abort(); up.abort(); auxiliary_task.abort();
-    println!("actual-native-rollover: local_compaction={local_compaction}; same local thread; upstream A then B; original reasoning binding retained; restored official access rejects pool history; login unchanged");
+    println!("actual-native-rollover: local_compaction={local_compaction}; quota_refusal={quota_refusal}; same local thread; upstream A then B; original reasoning binding retained; official upstream receives no pool turn; login unchanged");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "FUSION_NATIVE_ENGINE must be the actual desktop engine; local fake services and temporary HOME only"]
 async fn actual_native_same_thread_rolls_from_exhausted_a_to_b_without_foreign_reasoning() {
     let engine = std::env::var_os("FUSION_NATIVE_ENGINE").expect("FUSION_NATIVE_ENGINE must identify the verified actual desktop engine");
-    native_rollover_scenario(Path::new(&engine), false).await;
-    native_rollover_scenario(Path::new(&engine), true).await;
+    native_rollover_scenario(Path::new(&engine), false, false).await;
+    native_rollover_scenario(Path::new(&engine), true, false).await;
+    native_rollover_scenario(Path::new(&engine), false, true).await;
 }

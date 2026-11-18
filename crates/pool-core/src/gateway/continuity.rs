@@ -81,16 +81,26 @@ fn references(v: &Value, keys: &mut Vec<String>) {
 }
 pub(crate) fn required(h: &HeaderMap, v: &Value) -> Vec<String> {
     let mut keys = opaque_keys(&v["input"]);
+    account_references(h, v, &mut keys);
+    keys
+}
+
+pub(super) fn has_account_reference(h: &HeaderMap, v: &Value) -> bool {
+    let mut keys = Vec::new();
+    account_references(h, v, &mut keys);
+    !keys.is_empty()
+}
+
+fn account_references(h: &HeaderMap, v: &Value, keys: &mut Vec<String>) {
     if let Some(id) = v["previous_response_id"].as_str() {
         keys.push(binding_key("response", id));
     }
-    references(&v["images"], &mut keys);
-    references(&v["input"], &mut keys);
+    references(&v["images"], keys);
+    references(&v["input"], keys);
     // A native image request must resolve to the preceding model turn, not an arbitrary account.
     if let Some(t) = h.get("x-codex-image-turn-id").and_then(|s| s.to_str().ok()) {
         keys.push(binding_key("turn", t));
     }
-    keys
 }
 pub(super) fn pin(ctx: &Context, h: &HeaderMap, v: &Value) -> Result<Option<String>> {
     let ids = identities(h, v)?;

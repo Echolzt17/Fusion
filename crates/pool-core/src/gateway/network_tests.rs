@@ -60,7 +60,7 @@ async fn connection_and_response_header_deadlines_remain_distinct_without_replay
         assert_eq!(failure.kind, Some(NetworkErrorKind::Timeout));
         assert_eq!(failure.stage, if connecting { FailureStage::Connect } else { FailureStage::ResponseHeaders });
         assert!(failure.message.contains(if connecting { "建立上游连接超时" } else { "等待上游响应头超时" }));
-        assert!(failure.message.contains("未自动重放"));
+        assert!(failure.message.contains(if connecting { "业务请求尚未发送" } else { "未自动重放" }));
         assert!(!failure.message.contains("private-"));
         assert_eq!(calls.load(Ordering::SeqCst), if connecting { 2 } else { 1 });
         stop.cancel(); upstream.await.unwrap();
