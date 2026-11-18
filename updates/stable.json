@@ -1,11 +1,11 @@
 {
-  "version": "1.0.14",
-  "notes": "# Fusion 1.0.14\n\n## 本次重点\n\n- 完善同一本地聊天的后台账号接续：完整可读的新用户轮次支持纯文本输入、纯文本协作消息与完整命名工具结果，保留原生消息结构；原账号额度或授权不可用时，在业务发送前有界选择备用。\n- 修复明确 HTTP 429 拒绝后等待备用时取消，导致未执行请求被防重放守卫误拦的问题。再次派发前重新保护；已经输出、返回工具调用或执行不明的请求仍不自动重放。\n- 无法安全换号时说明具体原因，区分加密历史、原轮次续接、未完成工具链及暂未支持的消息结构。未知密文、加密协作消息、加密工具参数和账号专属引用不会被删除后冒充完整可读历史。\n\n## 增量诊断与额度展示\n\n- 日志上报在内部记住服务器已确认的请求，后续仅发送新增错误和变化后的完整小时统计；相同故障发生在新请求上仍会提交。用户确认后自动核对旧安装已提交记录，预览阶段不联网。无新增内容时关闭确认卡片，不生成重复报告或新回执。\n- 收到回执后原子保存回执及去重记录；断网、回执丢失、写盘或清理失败继续原编号、原字节。损坏及未来版本不清空重传。仍由用户手动确认上报，不增加后台上传。\n- 兼容报告服务支持受限核对和新增错误即时事件；独立日志检查每 3 小时运行，无新增且健康无变化时静默。\n- 额度胶囊显示最近实际请求账号和套餐；尚无业务请求时标记首选账号。展开可看短长周期、快照时间及原生登录套餐说明，失效额度显示未知，合计百分比不换算为统一 Token 余额。\n\n## 升级与验证范围\n\n本版合并此前 1.0.14-rc.1 的诊断与额度展示改进。构建、签名、公开下载及在线更新的实际结果单独记入维护记录；正式发布不会把尚未完成的真实验收改记为通过。\n\n已在实际 0.167 桌面内核、临时目录、公开假登录和本机假服务中验证：含纯文本协作消息与完整命名工具结果的同聊天 A→B、可读本地压缩摘要后 A→B，以及关闭后旧池聊天不串到官方接入。自动回归和内核隔离验证均不代替真实订阅、桌面交互、覆盖安装或在线升级验收。\n\n已有加密协作消息、仅含压缩密文的旧历史、未知密文、账号专属图片或服务端引用及未完成工具链仍保持原归属，不能承诺所有旧聊天无损换号；截图所示旧加密聊天的实际接续仍待验收。\n\nClaude Code 独立订阅池、手动 API 来源和代理功能保留原有语义；此次 Codex 修复不改变 Claude 会话绑定，不增加跨厂商迁移或账号同步。没有新增 SQLite schema 迁移。\n\n应用内更新沿用接入恢复、等待在途请求与正常关闭流程。账号池已关闭且脱离时，不关闭独立运行的 Codex；更新后账号池保持关闭，仅点击“启动账号池”才打开。手动安装前请正常关闭账号池并退出 Fusion。\r\n",
-  "pub_date": "2026-11-12T05:11:58.914Z",
+  "version": "1.0.15",
+  "notes": "# Fusion 1.0.15\r\n\r\n## 本次重点\r\n\r\n- 修复 Codex 同一聊天在原账号明确返回 HTTP 429 后，因冷却解除或备用授权失败而回选原账号的问题。完整可读的新用户轮次会尝试可用的备用账号。\r\n- 确认连接失败发生在业务请求发出前时，释放本轮防重放占用，网络恢复后可以重新提交。\r\n- 减少大上下文的重复复制，修正备用账号接续后的传输统计。\r\n\r\n## 注意事项\r\n\r\n- 账号专属图片、服务端引用、未知密文和未完成工具链保持原账号归属。执行状态不明或已有输出的请求继续受防重放保护。\r\n- 三种额度切换场景已用实际 Codex 内核和本机测试上游验证。真实账号额度耗尽及桌面在线升级仍待验收。\r\n",
+  "pub_date": "2026-11-18T05:26:06.708Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.14/Fusion_1.0.14_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVVKN0dEMG9RdEtNVlFRZnVEc1RwbmtaNFRVYlVKNjVVSWJlblMyTHZhVDFTdW83RTNOQWVkeXpCOTlmRUZobGY1WC93REJwd28ydDUxVTZMMzVOOGdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDYwMjI1CWZpbGU6RnVzaW9uXzEuMC4xNF94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjE0ClVGNkpnVmJOb2k1d2ltYTFoMVdDTUJMRk5FL1hrMDFEK3d2NmR4WE0zR2dvVjhxUnZxcTlUSWx0TE02RnlGZWJ0MDNTbVBtRGZiZUtnU2VyQ0ZCWkRnPT0K"
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.15/Fusion_1.0.15_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVRkOWY5b1RPaGpTWXNSZm9lVVlvSkhzSGNObE9CSUZVZmhKaHREa1hDOTM0b3RmY0NDVm1mUi9LRVo0aTREYjc5N0pRMzV1U0pvVjd6Zm5DMjVtNXdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0OTc5NTIwCWZpbGU6RnVzaW9uXzEuMC4xNV94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjE1CllaTTZTbDJwaHZJZHFSVzdocXlWM2tJTi82V2phN2dzMlRiZE5vdnFRZU82b0NRQjZsdTMvQWQxdFozQVErenZnT0NpZzF4UzhpYzdBUlhEY1F4YUNnPT0K"
     }
   }
 }
