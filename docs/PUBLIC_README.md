@@ -6,21 +6,18 @@
 
 Windows 本机账号池 · 可读历史后台换号 · 额度与用量可见 · 一键启停
 
-**当前版本：1.0.15 · Windows 10 / 11 x64**
+**当前版本：1.0.16 · Windows 10 / 11 x64**
 
-本版修复同一聊天的备用账号接续，支持应用内检查更新。
+本版增加 GPT-6.2 Sol 音频附件的发送前检查，支持应用内检查更新。
 
-[下载 v1.0.15 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.15/Fusion_1.0.15_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.15) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.16 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.16/Fusion_1.0.16_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.16) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
-## v1.0.15 的改进
+## v1.0.16 的改进
 
-- 原账号额度耗尽或明确返回 HTTP 429 后，带有完整可读历史的新一轮可以由备用账号在同一个聊天中完成。已拒绝的账号在本次请求中会持续排除。
-- 确认连接失败发生在业务请求发送前时，网络恢复后可以重新提交。已有输出、工具调用或执行状态不明的请求仍受防重放保护。
-- 减少大上下文的重复复制。账号专属图片、服务端引用、未知密文与未完成工具链保持原归属。
-
-已用实际 Codex 内核与本机测试上游验证普通聊天、可读压缩后聊天和明确 429 三种接续。真实订阅耗尽与桌面在线升级仍待验收。
+- GPT-6.2 Sol 支持图片输入。请求含有内嵌音频时，Fusion 在本机提示改用带时间码的文字稿。
+- 旧聊天如果仍携带音频，请在新聊天提交图片和文字稿。
 
 ## Fusion 能做什么？
 

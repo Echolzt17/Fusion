@@ -1330,6 +1330,24 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
             "请求必须是 JSON 对象",
         );
     }
+    // This model accepts text and images but has no audio input modality.
+    // https://developers.openai.com/api/docs/models/gpt-6.2-sol
+    if v["model"] == "gpt-6.2-sol"
+        && v["input"].as_array().into_iter().flatten().any(|item| {
+            item["type"].as_str().unwrap_or("message") == "message"
+                && item["role"] == "user"
+                && item["content"].as_array().into_iter().flatten()
+                    .any(|part| part["type"] == "input_audio")
+        })
+    {
+        a.requested_model = crate::usage::model_name(&v["model"]);
+        a.diagnostic.failure_stage = Some(FailureStage::RequestValidation);
+        return a.error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "GPT-6.2 Sol 不支持音频附件，请移除音频并提供带时间码的文字稿。图片可以保留。若音频已在聊天历史中，请在新聊天提交；本次请求未发往上游。",
+        );
+    }
     // Normalize before both replay protection and routing. Doing this only
     // after prepare used to hard-bind valid string input to the original
     // account, disabling exhaustion/429 rollover for these new user turns.

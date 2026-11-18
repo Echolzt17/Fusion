@@ -3,6 +3,70 @@ use super::*;
 use crate::tests::{add, fixture};
 
 #[tokio::test]
+async fn sol_rejects_inline_audio_before_dispatch_and_accepts_images_with_transcript() {
+    let (_dir, accounts) = fixture();
+    add(&accounts, "a");
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = calls.clone();
+    let (upstream, up) = serve(Router::new().route("/responses", post(move |Json(v): Json<Value>| {
+        let observed = observed.clone();
+        async move {
+            observed.lock().unwrap().push(v);
+            ([ ("content-type", "text/event-stream") ],
+             "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n")
+        }
+    }))).await;
+    let (base, gw) = serve(router(ctx(accounts.clone(), upstream))).await;
+    let client = reqwest::Client::new();
+    let url = format!("{base}/v1/responses");
+    let turn = json!({"thread_id":"audio-test-chat","turn_id":"audio-test-turn"}).to_string();
+    let image = json!({"type":"input_image","image_url":"data:image/png;base64,AA=="});
+    let audio = json!({"type":"input_audio","audio_url":"data:audio/mpeg;base64,PRIVATE_AUDIO"});
+    let request = json!({"model":"gpt-6.2-sol","input":[
+        {"type":"message","role":"user","content":[image,audio]},
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE_TASK"}]}
+    ]});
+    let response = client.post(&url).bearer_auth("test-key")
+        .header("x-codex-turn-metadata", &turn).json(&request).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let error = response.json::<Value>().await.unwrap();
+    assert_eq!(error["error"]["retryable"], false);
+    assert!(error["error"]["message"].as_str().unwrap().contains("带时间码的文字稿"));
+    assert!(calls.lock().unwrap().is_empty());
+    assert!(accounts.store.binding(&binding_key("thread", "audio-test-chat")).unwrap().is_none());
+    assert!(accounts.store.binding(&binding_key("turn", "audio-test-turn")).unwrap().is_none());
+    let logs = accounts.store.logs().unwrap();
+    assert_eq!(logs.len(), 1);
+    let diagnostic = logs[0].diagnostic.as_ref().unwrap();
+    assert_eq!(logs[0].requested_model.as_deref(), Some("gpt-6.2-sol"));
+    assert_eq!(diagnostic.failure_stage, Some(FailureStage::RequestValidation));
+    assert!(!diagnostic.execution.as_ref().unwrap().upstream_attempted);
+    let log = serde_json::to_string(&logs).unwrap();
+    assert!(!log.contains("PRIVATE_AUDIO") && !log.contains("PRIVATE_TASK"));
+
+    let mut with_transcript = request.clone();
+    with_transcript["input"][0]["content"][1] = json!({"type":"input_text","text":"00:00 caption"});
+    let response = client.post(&url).bearer_auth("test-key")
+        .header("x-codex-turn-metadata", &turn).json(&with_transcript).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+
+    let mut other_model = request;
+    other_model["model"] = json!("fixture-model");
+    let response = client.post(&url).bearer_auth("test-key").json(&other_model).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+
+    let forwarded = calls.lock().unwrap();
+    assert_eq!(forwarded.len(), 2);
+    assert_eq!(forwarded[0]["input"], with_transcript["input"]);
+    assert_eq!(forwarded[1]["input"], other_model["input"]);
+    drop(forwarded);
+    gw.abort();
+    up.abort();
+}
+
+#[tokio::test]
 async fn models_are_captured_for_stream_tools_compact_images_and_interruption() {
     let (_dir, accounts) = fixture();
     add(&accounts, "a");
