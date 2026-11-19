@@ -1,11 +1,11 @@
 {
-  "version": "1.0.16",
-  "notes": "# Fusion 1.0.16\n\n## 本次重点\n\n- 在发送 Codex 订阅池请求前，识别 GPT-6.2 Sol 不支持的内嵌音频。提示如何保留图片并用带时间码的文字稿替代音频附件。\n- 如果旧聊天的历史仍含音频，请在新聊天提交图片和文字稿。\n\n## 注意事项\n\n- 本版增加本地输入检查。GPT-6.2 Sol 的原生输入能力由模型决定。\n",
-  "pub_date": "2026-11-18T14:06:22.033Z",
+  "version": "1.0.17",
+  "notes": "# Fusion 1.0.17\n\n## 本次重点\n\n- Codex 在发送前锁定轮次归属，防止同一轮的等价请求重复派发。明确拒绝额度时，可安全接续的新轮次仍可选择备用账号。\n- 更新收尾失败后恢复网络路由。单份 VPN 订阅快照损坏时，Fusion 仍可启动并在对应订阅卡片显示恢复入口。\n- Claude 的旧请求失败不会覆盖重新授权结果。手动 API 来源更改协议、主机或端口时需要填写对应站点的密钥。\n- 只读状态刷新在超时后可恢复，并忽略迟到的旧结果。\n\n真实订阅业务、远程 VPN 订阅和应用内覆盖升级仍待验收。\n",
+  "pub_date": "2026-11-19T11:57:15.535Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.16/Fusion_1.0.16_x64-setup.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVRRVDN0Ukx2K1FuS2RvUjhLSmRvSHI3Nk5KbkdTOWEzN0l6UVNhSFhCc0lvd3FjTHNqZ0Y0UjRCeEo1OVRyZTF4NXV4cFVKOWNGWWE5VU9vVm1YNWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDEwNjI3CWZpbGU6RnVzaW9uXzEuMC4xNl94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjE2CkJvRUVPYWc4WXlkdnhXTy9zcVV6VlJQT3lGd0ZIQ0FqMEQyUXFrOTkxSTQ4WHQ2SGltbUxUZVJ3OFYvdzB5bS9heW9oVVg4cFNDYmhPbFZsdWFENUFRPT0K"
+      "url": "https://github.com/Echolzt17/Fusion/releases/download/v1.0.17/Fusion_1.0.17_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVHI0K09JYXYrTVhSZTdhejllVUxqMC9HR0dJS2lVNlR5bDJxSC9kYVNwRGZ6Z3g4Z1Z1N3NYVmY4bGExemZvWHUvV1Z0dHFtMi9yZmU5cDdQOXpHMDlGZWVsNWx3TXdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MDg5NDExCWZpbGU6RnVzaW9uXzEuMC4xN194NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjE3CjgwNnJycXRGSGRML3c5Z1JmdXBuWWp1aU5WQlYycU5GRkRUdmZMUmx0MjVBQ25vR3ZrWmdwY1dXYkpjU3BXTS9INkViZlViRTRkalh1UTdvQk0vTkFnPT0K"
     }
   }
 }
