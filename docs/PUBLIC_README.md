@@ -6,18 +6,22 @@
 
 Windows 本机账号池 · 可读历史后台换号 · 额度与用量可见 · 一键启停
 
-**当前版本：1.0.16 · Windows 10 / 11 x64**
+**当前版本：1.0.17 · Windows 10 / 11 x64**
 
-本版增加 GPT-6.2 Sol 音频附件的发送前检查，支持应用内检查更新。
+本版修复同轮重复派发、更新失败后的网络恢复及桌面状态刷新。
 
-[下载 v1.0.16 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.16/Fusion_1.0.16_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.16) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.17 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.17/Fusion_1.0.17_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.17) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
-## v1.0.16 的改进
+## v1.0.17 的改进
 
-- GPT-6.2 Sol 支持图片输入。请求含有内嵌音频时，Fusion 在本机提示改用带时间码的文字稿。
-- 旧聊天如果仍携带音频，请在新聊天提交图片和文字稿。
+- Codex 在发送前锁定轮次归属，防止同一轮的等价请求重复派发。明确拒绝额度时，可安全接续的新轮次仍可选择备用账号。
+- 更新收尾失败后恢复网络路由。单份 VPN 订阅快照损坏时，Fusion 仍可启动并在对应订阅卡片显示恢复入口。
+- Claude 的旧请求失败不会覆盖重新授权结果。手动 API 来源更改协议、主机或端口时需要填写对应站点的密钥。
+- 只读状态刷新在超时后可恢复，并忽略迟到的旧结果。
+
+真实订阅业务、远程 VPN 订阅和应用内覆盖升级仍待验收。
 
 ## Fusion 能做什么？
 

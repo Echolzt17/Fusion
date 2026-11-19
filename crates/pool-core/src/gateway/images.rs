@@ -36,6 +36,10 @@ async fn forward(ctx: Context, h: HeaderMap, v: Value, edit: bool, tracking: Req
             "图片编辑需要 1—5 张参考图",
         );
     }
+    let _turn = match guard_turn(&mut audit, &h, &v) {
+        Ok(turn) => turn,
+        Err(response) => return *response,
+    };
     let (lease, token) = match prepare(&mut audit, &h, &v).await {
         Ok(v) => v,
         Err(r) => return *r,

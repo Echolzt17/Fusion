@@ -17,6 +17,63 @@ fn exhaust(accounts: &Accounts, id: &str) {
 }
 
 #[tokio::test]
+async fn in_flight_turn_excludes_competing_stages_until_quota_rollover_finishes() {
+    let (_dir, accounts) = fixture();
+    add(&accounts, "a");
+    add(&accounts, "b");
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let refused = Arc::new(tokio::sync::Notify::new());
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let signals = (entered.clone(), refused.clone(), seen.clone());
+    let (upstream, up) = serve(Router::new().route("/responses", post(move |h: HeaderMap| {
+        let (entered, refused, seen) = signals.clone();
+        async move {
+            let id = h["chatgpt-account-id"].to_str().unwrap().to_owned();
+            seen.lock().unwrap().push(id.clone());
+            if id == "chatgpt-a" {
+                entered.notify_one();
+                refused.notified().await;
+                return StatusCode::TOO_MANY_REQUESTS.into_response();
+            }
+            ([("content-type", "text/event-stream")], completed(json!([]))).into_response()
+        }
+    }))).await;
+    let context = ctx(accounts.clone(), upstream);
+    context.scheduler.select_account(Some("a".into())).unwrap();
+    let (base, gateway) = serve(router(context)).await;
+    let request = reqwest::Client::new().post(format!("{base}/v1/responses"))
+        .bearer_auth("test-key").header("x-codex-turn-metadata", turn("concurrent-chat", "concurrent-turn"));
+    let input = json!([{"role":"user","content":"public task"}]);
+    let first = tokio::spawn(request.try_clone().unwrap().json(&json!({"input":input,"stream":false})).send());
+    tokio::time::timeout(Duration::from_secs(3), entered.notified()).await.unwrap();
+    let key = binding_key("turn", "concurrent-turn");
+    assert_eq!(accounts.store.binding(&key).unwrap().as_deref(), Some("a"));
+    for (body, status) in [
+        (json!({"input":input,"stream":true,"store":true,"instructions":""}), StatusCode::BAD_REQUEST),
+        (json!({"input":input,"instructions":"a different business option"}), StatusCode::CONFLICT),
+    ] {
+        let response = tokio::time::timeout(Duration::from_secs(3),
+            request.try_clone().unwrap().json(&body).send()).await.unwrap().unwrap();
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(*seen.lock().unwrap(), ["chatgpt-a"]);
+    refused.notify_one();
+    let response = tokio::time::timeout(Duration::from_secs(3), first).await.unwrap().unwrap().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(accounts.store.binding(&key).unwrap().as_deref(), Some("b"));
+    let stage = json!({"input":[input[0],
+        {"type":"function_call","name":"fixture_tool","call_id":"fixture","arguments":"{}"},
+        {"type":"function_call_output","call_id":"fixture","output":"fixture result"}]});
+    let followup = request.json(&stage).send().await.unwrap();
+    assert_eq!(followup.status(), StatusCode::OK);
+    followup.bytes().await.unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["chatgpt-a", "chatgpt-b", "chatgpt-b"]);
+    gateway.abort();
+    up.abort();
+}
+
+#[tokio::test]
 async fn string_user_turn_rolls_on_exhaustion_and_429_and_cannot_be_replayed_as_an_array() {
     for exhausted in [true, false] {
         let (_dir, accounts) = fixture(); add(&accounts, "a"); add(&accounts, "b");

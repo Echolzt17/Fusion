@@ -67,6 +67,70 @@ fn free_and_missing_quotas_are_distinct_and_unknown_is_never_zero() {
 }
 
 #[tokio::test]
+async fn late_401_and_429_cannot_override_new_authorization() {
+    use axum::{http::{HeaderMap, StatusCode}, routing::post, Json};
+    use tokio::sync::Notify;
+    for status in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
+        let (_dir, mut pool) = fixture();
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let signals = (entered.clone(), release.clone());
+        let upstream = axum::Router::new().route("/v1/messages", post(move |headers: HeaderMap| {
+            let (entered, release) = signals.clone();
+            async move {
+                match headers["authorization"].to_str().unwrap() {
+                    "Bearer public-old" => {
+                        entered.notify_one();
+                        release.notified().await;
+                        (status, Json(json!({})))
+                    }
+                    "Bearer public-new" => (StatusCode::OK, Json(json!({"type":"message","content":[]}))),
+                    _ => panic!("unexpected fixture authorization"),
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap(); });
+        Arc::get_mut(&mut pool).unwrap().upstream = format!("http://{address}");
+        let profile = json!({"account":{"uuid":"public-account"},"organization":{"uuid":"public-org"}});
+        let mut directory = pool.directory().unwrap();
+        directory.accounts.get_mut("a").unwrap().identity =
+            format!("{:x}", Sha256::digest(b"public-account/public-org"));
+        pool.save(&directory).unwrap();
+        let tokens = |access: &str| Tokens { access: access.into(), refresh: "public-refresh".into(), expires: now() + 3600 };
+        pool.accept_profile(tokens("public-old"), profile.clone(), Some("a".into())).await.unwrap();
+        let sources = Arc::new(crate::api_sources::Sources::new(
+            pool.store.clone(), Arc::new(crate::vault::MemoryVault::default()),
+        ));
+        let gateway = crate::api_gateway::ApiGateway::start_claude_pool(sources, pool.clone()).await.unwrap();
+        let request = reqwest::Client::builder().no_proxy().build().unwrap()
+            .post(format!("{}/messages", gateway.endpoint().base_url()))
+            .bearer_auth(gateway.endpoint().local_key())
+            .json(&json!({"model":"fixture","messages":[{"role":"user","content":"public task"}],
+                "metadata":{"user_id":"{\"session_id\":\"stable-session\"}"}}));
+        let pending = tokio::spawn(request.try_clone().unwrap().send());
+        tokio::time::timeout(Duration::from_secs(3), entered.notified()).await.unwrap();
+        pool.accept_profile(tokens("public-new"), profile, Some("a".into())).await.unwrap();
+        release.notify_one();
+        let response = tokio::time::timeout(Duration::from_secs(3), pending).await.unwrap().unwrap().unwrap();
+        assert_eq!(response.status(), status);
+        let current = &pool.directory().unwrap().accounts["a"];
+        assert_eq!(current.state, "ready");
+        assert_eq!(current.cooldown_until, 0);
+        assert_eq!(request.send().await.unwrap().status(), StatusCode::OK);
+        pool.failure("a", current.revision, status.as_u16()).unwrap();
+        let updated = &pool.directory().unwrap().accounts["a"];
+        if status == StatusCode::UNAUTHORIZED {
+            assert_eq!(updated.state, "reauth");
+        } else {
+            assert!(updated.cooldown_until > now());
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn gateway_uses_pinned_oauth_accounts_records_real_usage_and_never_replays_failures() {
     use axum::{
         http::{HeaderMap, StatusCode},

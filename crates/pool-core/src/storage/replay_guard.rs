@@ -26,11 +26,11 @@ impl Store {
     /// Persist the dispatch intent before any upstream send. A completed or
     /// uncertain attempt stays reserved; only a request not yet dispatched or
     /// a confirmed non-executed quota rejection may release its exact claim.
-    pub fn claim_native_replay(&self, digest: &str) -> Result<NativeReplayClaim> {
-        self.claim_native_replay_at(digest, crate::now(), MAX_ENTRIES)
+    pub fn claim_native_replay(&self, digest: &str, legacy: &[String]) -> Result<NativeReplayClaim> {
+        self.claim_native_replay_at(digest, legacy, crate::now(), MAX_ENTRIES)
     }
 
-    fn claim_native_replay_at(&self, digest: &str, at: i64, capacity: usize) -> Result<NativeReplayClaim> {
+    fn claim_native_replay_at(&self, digest: &str, legacy: &[String], at: i64, capacity: usize) -> Result<NativeReplayClaim> {
         if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
             return Err("请求防重放标识无效，未发送请求".into());
         }
@@ -58,11 +58,14 @@ impl Store {
             [at.saturating_sub(RETENTION_SECS)],
         ).map_err(|_| "清理到期请求防重放状态失败")?;
         let key = format!("{ENTRY_PREFIX}{digest}");
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)", [&key], |row| row.get(0),
-        ).map_err(|_| "读取请求防重放状态失败")?;
-        if exists {
-            return Err("此请求已经发送或执行状态未确认，已阻止客户端自动重放；请先核对原请求结果".into());
+        {
+            let mut lookup = tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)")
+                .map_err(|_| "读取请求防重放状态失败")?;
+            for key in std::iter::once(key.clone()).chain(legacy.iter().map(|old| format!("{ENTRY_PREFIX}{old}"))) {
+                if lookup.query_row([key], |row| row.get::<_, bool>(0)).map_err(|_| "读取请求防重放状态失败")? {
+                    return Err("此请求已经发送或执行状态未确认，已阻止客户端自动重放；请先核对原请求结果".into());
+                }
+            }
         }
         let count: usize = tx.query_row(
             "SELECT COUNT(*) FROM kv WHERE key LIKE 'native-replay/v1/%'", [], |row| row.get(0),
@@ -110,15 +113,15 @@ mod tests {
     fn native_replay_survives_restart_and_only_owner_can_release() {
         let (dir, accounts) = fixture();
         let fingerprint = digest("public business fingerprint");
-        let first = accounts.store.claim_native_replay(&fingerprint).unwrap();
+        let first = accounts.store.claim_native_replay(&fingerprint, &[]).unwrap();
         let reopened = Store::open(&dir.path().join("pool.sqlite")).unwrap();
-        assert!(reopened.claim_native_replay(&fingerprint).is_err());
+        assert!(reopened.claim_native_replay(&fingerprint, &[]).is_err());
         reopened.release_native_replay(&first).unwrap();
-        let second = reopened.claim_native_replay(&fingerprint).unwrap();
+        let second = reopened.claim_native_replay(&fingerprint, &[]).unwrap();
         assert!(reopened.release_native_replay(&first).is_err());
-        assert!(reopened.claim_native_replay(&fingerprint).is_err());
+        assert!(reopened.claim_native_replay(&fingerprint, &[]).is_err());
         reopened.release_native_replay(&second).unwrap();
-        assert!(reopened.claim_native_replay(&fingerprint).is_ok());
+        assert!(reopened.claim_native_replay(&fingerprint, &[]).is_ok());
     }
 
     #[test]
@@ -127,7 +130,7 @@ mod tests {
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
         let handles: Vec<_> = (0..2).map(|_| {
             let store = accounts.store.clone(); let barrier = barrier.clone();
-            std::thread::spawn(move || { barrier.wait(); store.claim_native_replay(&digest("same")).is_ok() })
+            std::thread::spawn(move || { barrier.wait(); store.claim_native_replay(&digest("same"), &[]).is_ok() })
         }).collect();
         barrier.wait();
         assert_eq!(handles.into_iter().map(|handle| handle.join().unwrap()).filter(|claimed| *claimed).count(), 1);
@@ -138,17 +141,17 @@ mod tests {
         let (_dir, accounts) = fixture();
         let at = crate::now();
         let original = digest("original");
-        accounts.store.claim_native_replay_at(&original, at, 1).unwrap();
-        assert!(accounts.store.claim_native_replay_at(&digest("next"), at + RETENTION_SECS - 1, 1).is_err());
-        assert!(accounts.store.claim_native_replay_at(&original, at + RETENTION_SECS - 1, 1).is_err());
-        assert!(accounts.store.claim_native_replay_at(&digest("next"), at + RETENTION_SECS, 1).is_ok());
+        accounts.store.claim_native_replay_at(&original, &[], at, 1).unwrap();
+        assert!(accounts.store.claim_native_replay_at(&digest("next"), &[], at + RETENTION_SECS - 1, 1).is_err());
+        assert!(accounts.store.claim_native_replay_at(&original, &[], at + RETENTION_SECS - 1, 1).is_err());
+        assert!(accounts.store.claim_native_replay_at(&digest("next"), &[], at + RETENTION_SECS, 1).is_ok());
     }
 
     #[test]
     fn native_replay_future_version_blocks_without_modifying_state() {
         let (_dir, accounts) = fixture();
         accounts.store.set(VERSION_KEY, "2").unwrap();
-        assert!(accounts.store.claim_native_replay(&digest("request")).is_err());
+        assert!(accounts.store.claim_native_replay(&digest("request"), &[]).is_err());
         assert_eq!(accounts.store.get(VERSION_KEY).unwrap().as_deref(), Some("2"));
         assert!(accounts.store.get(&format!("{ENTRY_PREFIX}{}", digest("request"))).unwrap().is_none());
     }

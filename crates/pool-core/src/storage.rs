@@ -239,6 +239,21 @@ impl Store {
         tx.commit().map_err(|_| "切换聊天账号事务失败".into())
     }
     pub fn bind_many(&self, keys: &[String], account: &str) -> Result<()> {
+        self.bind_keys(keys, account, false)
+    }
+    pub(crate) fn reserve_turn(&self, key: &str, account: &str) -> Result<()> {
+        self.bind_keys(&[key.to_owned()], account, true)
+    }
+    pub(crate) fn release_refused_turn(&self, key: &str, account: &str) -> Result<()> {
+        let db = self.db.lock().map_err(|_| "数据库锁异常")?;
+        let removed = db.execute("DELETE FROM bindings WHERE key=?1 AND account=?2", params![key, account])
+            .map_err(|_| "释放未执行轮次失败")?;
+        if removed != 1 {
+            return Err("轮次归属已变化，已停止改选账号".into());
+        }
+        Ok(())
+    }
+    fn bind_keys(&self, keys: &[String], account: &str, require_unbound: bool) -> Result<()> {
         if keys.is_empty() {
             return Ok(());
         }
@@ -273,7 +288,7 @@ impl Store {
                 })
                 .optional()
                 .map_err(|_| "读取会话绑定失败")?;
-            if existing.as_deref().is_some_and(|id| id != account) {
+            if existing.as_deref().is_some_and(|id| require_unbound || id != account) {
                 return Err("该会话已经绑定其他账号，已阻止跨账号发送".into());
             }
             db.execute("INSERT INTO bindings VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET expires=excluded.expires", params![key,account,crate::now()+30*86400]).map_err(|_| "保存会话绑定失败")?;

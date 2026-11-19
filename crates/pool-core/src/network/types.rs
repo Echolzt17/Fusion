@@ -167,6 +167,8 @@ pub struct SubscriptionView {
     pub kind: String,
     pub node_count: usize,
     pub updated_at: i64,
+    pub error: Option<String>,
+    pub requires_upgrade: bool,
 }
 
 // URL and content are secret input, never Debug or returned to the UI.

@@ -708,16 +708,26 @@ async fn install(app: &tauri::AppHandle, updates: &Updates, manifest: Value, mut
     updates.phase("finishing");
     a.accounts.wait_background_idle().await?;
     a.claude_pool.wait_idle().await?;
-    a.network.shutdown().await?;
-    if !pool_core::api_config::detached(&config::codex_config_path()?)? {
-        return Err("Codex API 接入仍依赖 Fusion，更新已停止".into());
-    }
-    if !config::detached(&config::codex_config_path()?, &std::env::current_exe().map_err(|_| "找不到程序路径")?, a.accounts.store.settings()?.port)? {
-        return Err("Codex 仍依赖 Fusion，更新已停止".into());
-    }
-    updates.install_with_resume(&Resume {
-        from: env!("CARGO_PKG_VERSION").into(), to: version.into(), enabled: false, claimed: false, directory,
-    }, || update.install(bytes).map_err(|_| "安装器无法启动；账号池保持关闭，可重试更新或打开修复目录".to_owned()))
+    finish_with_network_stopped(&a.network, || {
+        if !pool_core::api_config::detached(&config::codex_config_path()?)? {
+            return Err("Codex API 接入仍依赖 Fusion，更新已停止".into());
+        }
+        if !config::detached(&config::codex_config_path()?, &std::env::current_exe().map_err(|_| "找不到程序路径")?, a.accounts.store.settings()?.port)? {
+            return Err("Codex 仍依赖 Fusion，更新已停止".into());
+        }
+        updates.install_with_resume(&Resume {
+            from: env!("CARGO_PKG_VERSION").into(), to: version.into(), enabled: false, claimed: false, directory,
+        }, || update.install(bytes).map_err(|_| "安装器无法启动；账号池保持关闭，可重试更新或打开修复目录".to_owned()))
+    }).await
+}
+async fn finish_with_network_stopped(
+    network: &Arc<pool_core::network::Network>,
+    finalize: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let shutdown = network.prepare_shutdown().await?;
+    finalize()?;
+    shutdown.commit();
+    Ok(())
 }
 // Called with the lifecycle and exclusive work locks held, after package validation.
 // An interrupted switch must go through the same verified close as an ordinary

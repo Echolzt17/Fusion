@@ -218,6 +218,9 @@ impl Pool {
     async fn accept(&self, value: Value, expected: Option<String>) -> Result<()> {
         let tokens = parse_tokens(&value, None)?;
         let profile = self.json(PROFILE_URL, &tokens.access).await?;
+        self.accept_profile(tokens, profile, expected).await
+    }
+    async fn accept_profile(&self, tokens: Tokens, profile: Value, expected: Option<String>) -> Result<()> {
         let account = profile.get("account").unwrap_or(&profile);
         let uuid = account["uuid"]
             .as_str()
@@ -275,7 +278,7 @@ impl Pool {
         }
         self.save(&d)
     }
-    async fn token(self: &Arc<Self>, id: &str) -> Result<Tokens> {
+    async fn token(self: &Arc<Self>, id: &str) -> Result<(Tokens, u64)> {
         // A rotating refresh completes even when its request/IPC caller goes away.
         let pool = self.clone();
         let id = id.to_owned();
@@ -301,7 +304,7 @@ impl Pool {
             .map_err(|_| "Claude 续期任务未完成")?;
         Ok(())
     }
-    async fn token_inner(&self, id: &str) -> Result<Tokens> {
+    async fn token_inner(&self, id: &str) -> Result<(Tokens, u64)> {
         let token_lock = self.token_lock(id);
         let _t = token_lock.lock().await;
         let d = self.directory()?;
@@ -317,12 +320,12 @@ impl Pool {
         )
         .map_err(|_| "Claude 凭据损坏，请重新授权")?;
         if old.expires > now() + 300 {
-            return Ok(old);
+            return Ok((old, a.revision));
         }
         let r=self.http.post(TOKEN_URL).await?.timeout(Duration::from_secs(30)).json(&json!({"grant_type":"refresh_token","refresh_token":old.refresh,"client_id":CLIENT_ID})).send().await.map_err(|_|"Claude 授权续期网络失败；不会自动重试")?;
         if !r.status().is_success() {
             if matches!(r.status().as_u16(), 400 | 401) {
-                self.failure(id, 401)?;
+                self.failure(id, a.revision, 401)?;
             }
             return Err("Claude 授权续期未完成；不会自动重试".into());
         }
@@ -335,7 +338,7 @@ impl Pool {
             &format!("claude-pool/{id}"),
             &serde_json::to_string(&t).map_err(|_| "Claude 凭据编码失败")?,
         )?;
-        Ok(t)
+        Ok((t, a.revision))
     }
     pub async fn refresh(self: &Arc<Self>, id: &str) -> Result<()> {
         let _slot = self
@@ -353,7 +356,7 @@ impl Pool {
             revision
         };
         let result = async {
-            let t = self.token(id).await?;
+            let (t, _) = self.token(id).await?;
             let v = self.json(USAGE_URL, &t.access).await?;
             quota(&v)
         }
@@ -395,7 +398,7 @@ impl Pool {
         Self::source(SOURCE_ID)
     }
     pub(crate) async fn snapshot(self: &Arc<Self>, id: &str) -> Result<Snapshot> {
-        let t = self.token(id).await?;
+        let (t, revision) = self.token(id).await?;
         #[allow(unused_mut)]
         let mut source = Self::source(id);
         #[cfg(test)]
@@ -403,7 +406,7 @@ impl Pool {
             source.base_url = self.upstream.clone();
             source.network = NetworkMode::Direct;
         }
-        Snapshot::claude(source, t.access)
+        Snapshot::claude(source, t.access, revision)
     }
     pub fn quota_due(&self, id: &str) -> Result<bool> {
         Ok(self
@@ -413,7 +416,7 @@ impl Pool {
             .is_some_and(|a| now() - a.last_quota_attempt >= 600))
     }
     pub(crate) fn placeholder() -> Result<Snapshot> {
-        Snapshot::claude(Self::source(SOURCE_ID), String::new())
+        Snapshot::claude(Self::source(SOURCE_ID), String::new(), 0)
     }
     pub fn ready(&self) -> Result<bool> {
         Ok(self.accounts()?.iter().any(eligible))
@@ -502,10 +505,13 @@ impl Pool {
             &serde_json::to_string(&b).map_err(|_| "Claude 会话绑定编码失败")?,
         )
     }
-    pub(crate) fn failure(&self, id: &str, status: u16) -> Result<()> {
+    pub(crate) fn failure(&self, id: &str, revision: u64, status: u16) -> Result<()> {
+        if !matches!(status, 401 | 429) {
+            return Ok(());
+        }
         let _g = self.lock.lock().map_err(|_| "Claude 账号锁异常")?;
         let mut d = self.directory()?;
-        if let Some(a) = d.accounts.get_mut(id) {
+        if let Some(a) = d.accounts.get_mut(id).filter(|a| a.revision == revision && a.state != "deleting") {
             if status == 401 {
                 a.state = "reauth".into();
             } else if status == 429 {

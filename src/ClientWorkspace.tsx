@@ -69,6 +69,12 @@ function SourceEditor({ source, client, onClose, onSave }: EditorProps) {
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  let originChanged = false;
+  if (source) {
+    try { originChanged = new URL(source.baseUrl).origin !== new URL(baseUrl.trim()).origin; }
+    catch { /* The form validates invalid addresses separately. */ }
+  }
+  const needsKey = !source?.hasKey || originChanged;
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -79,6 +85,9 @@ function SourceEditor({ source, client, onClose, onSave }: EditorProps) {
       const url = new URL(baseUrl.trim());
       if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
     } catch { setError('请输入有效的 HTTP(S) Base URL，不包含账号密码、查询参数或片段。'); return; }
+    if (needsKey && !apiKey.trim()) {
+      setError('请输入新站点的 API Key。'); return;
+    }
     setBusy(true); setError('');
     try {
       await onSave({ id: source?.id ?? null, name: name.trim(), protocol, baseUrl: baseUrl.trim(), model: model.trim(), network, enabled, apiKey: apiKey.trim() || null });
@@ -97,8 +106,8 @@ function SourceEditor({ source, client, onClose, onSave }: EditorProps) {
       <label htmlFor={prefix + '-url'}>Base URL<input id={prefix + '-url'} type="url" autoCapitalize="off" autoComplete="off" spellCheck={false} required value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={protocol === 'messages' ? 'https://api.example.com' : 'https://api.example.com/v1'} disabled={busy} /></label>
       <p className="cw-field-note">填写服务提供的接口根地址，保留其要求的路径；不要填完整的请求地址。</p>
       <label htmlFor={prefix + '-model'}>模型名称<input id={prefix + '-model'} autoComplete="off" spellCheck={false} required value={model} onChange={e => setModel(e.target.value)} placeholder="按服务提供的模型 ID 填写" disabled={busy} /></label>
-      <label htmlFor={prefix + '-key'}>API Key<input id={prefix + '-key'} type="password" autoComplete="new-password" spellCheck={false} required={!source?.hasKey} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={source?.hasKey ? '已保存密钥，留空保留' : '输入服务颁发的 API Key'} disabled={busy} /></label>
-      <p className="cw-field-note">密钥只提交给本机后端，不在来源卡片或日志中展示。{source?.hasKey ? '编辑时留空保留现有密钥。' : ''}</p>
+      <label htmlFor={prefix + '-key'}>API Key<input id={prefix + '-key'} type="password" autoComplete="new-password" spellCheck={false} required={needsKey} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={needsKey ? '输入服务颁发的 API Key' : '已保存密钥，留空保留'} disabled={busy} /></label>
+      <p className="cw-field-note">{originChanged ? '地址的协议、主机或端口已变化，请填写该站点的密钥。' : '密钥仅保存在本机。'}</p>
       <label htmlFor={prefix + '-network'}>网络连接<select id={prefix + '-network'} value={network} onChange={e => setNetwork(e.target.value as SourceInput['network'])} disabled={busy}><option value="systemProxy">跟随系统代理</option><option value="direct">直接连接</option></select></label>
       <label className="cw-checkbox"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} disabled={busy} />启用此来源</label>
       {!compatible(client, protocol) && <p className="cw-callout">{clients[client]} 首版使用 {client === 'codex' ? 'Responses' : 'Messages'} 协议。此配置可保存和检查，当前客户端不能直接启动它。</p>}

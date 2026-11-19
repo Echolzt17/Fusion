@@ -9,26 +9,23 @@ pub async fn claude_pool_status(
     a: tauri::State<'_, App>,
     logs: Option<bool>,
 ) -> Result<serde_json::Value> {
-    let client = a
-        .api_clients
-        .statuses()
-        .await?
-        .into_iter()
-        .find(|s| s.client == ClientKind::ClaudeCode)
-        .ok_or("Claude 状态不可用")?;
-    let records = if logs.unwrap_or(false) {
-        a.api_clients
-            .logs(ClientKind::ClaudeCode)
-            .await?
-            .into_iter()
-            .filter(|l| l.source_id.starts_with("claude-"))
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
+    let clients = a.api_clients.clone();
     let pool = a.claude_pool.clone();
     let login = a.claude_login.status();
-    crate::blocking(move||Ok(serde_json::json!({"accounts":pool.accounts()?,"preferred":pool.preferred()?,"summary":pool.summary()?,"client":client,"login":login,"logs":records}))).await
+    crate::blocking_read("claude_pool_status", move || {
+        let client = clients.statuses()?
+            .into_iter()
+            .find(|s| s.client == ClientKind::ClaudeCode)
+            .ok_or("Claude 状态不可用")?;
+        let records = if logs.unwrap_or(false) {
+            clients.logs(ClientKind::ClaudeCode)?.into_iter()
+                .filter(|l| l.source_id.starts_with("claude-"))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        Ok(serde_json::json!({"accounts":pool.accounts()?,"preferred":pool.preferred()?,"summary":pool.summary()?,"client":client,"login":login,"logs":records}))
+    }).await
 }
 #[tauri::command]
 pub async fn claude_pool_login(app: tauri::AppHandle, id: Option<String>) -> Result<()> {
@@ -96,7 +93,7 @@ pub async fn claude_pool_account(
                 .lifecycle
                 .try_lock()
                 .map_err(|_| "客户端正在切换，请稍后移除账号")?;
-            if a.api_clients.has_connection(ClientKind::ClaudeCode).await?
+            if a.api_clients.has_connection(ClientKind::ClaudeCode)?
                 || a.claude_login.active()
             {
                 return Err(

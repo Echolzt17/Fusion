@@ -56,15 +56,14 @@ export function RequestRecords({ accounts, index, indexError, selection: control
     if (queryRef.current !== query) { reader.current!.invalidate(); queryRef.current = query; if (cursors.length > 1) { setCursors([null]); return; } }
     const nextSignature = JSON.stringify([query,cursor]);
     if (signature.current !== nextSignature) { reader.current!.invalidate(); signature.current = nextSignature; setError(''); setPage({ items: [], nextCursor: null }); }
-    setLoading(true);
     const byNode = operations(kind), byFilter = operations(filters.operation);
     const matched = byNode.length && byFilter.length ? byNode.filter(op=>byFilter.includes(op)) : byNode.length ? byNode : byFilter;
     if (byNode.length && byFilter.length && !matched.length) { setPage({items:[],nextCursor:null});setLoading(false);return; }
-    reader.current!.refresh([{ name:'请求记录', read:()=>invoke<LogPage>('request_history', {
+    reader.current!.refresh([{ name:'请求记录', read:()=>{ setLoading(true); return invoke<LogPage>('request_history', {
       conversationKey: system ? null : selectedKey ?? null, result:filters.result, system, cursor,
       filter:{ unknownConversation: !system && (scope === 'unknown' || (scope === 'auto' && !selectedKey)), operations:matched,
         account:filters.account === 'all' ? null : filters.account.slice(1), model:filters.model === 'all' ? null : filters.model.slice(1) }
-    }), update:setPage }]);
+    }); }, update:setPage }]);
   },[query,cursor,index,revision,active]);
   function dismissNavigation() { setNavigationOpen(false); navigationTrigger.current?.focus(); }
   function choose(nextScope: string, key?: string, nextKind = 'all') {

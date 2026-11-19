@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Modal } from './Modal';
+import { createReadCoordinator } from './refresh';
 import type { NetworkSettings, NetworkStatus, NodeView, SubscriptionView } from './network-types';
 import './network-cards.css';
 
@@ -54,8 +55,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const linkInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(false);
-  const revision = useRef(0);
-  const reading = useRef(false);
+  const reader = useRef<ReturnType<typeof createReadCoordinator> | null>(null);
   const operating = useRef(false);
   const activeCommand = useRef('');
   const operationStarted = useRef(0);
@@ -78,23 +78,22 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (reading.current || operating.current && activeCommand.current !== 'network_check') return;
-    reading.current = true;
-    const version = revision.current;
-    try {
-      const next = await invoke<NetworkStatus>('network_status');
-      if (version === revision.current) accept(next);
-    } catch (error) {
-      if (mounted.current && version === revision.current) setReadError(safeError(error));
-    } finally { reading.current = false; }
+  const refresh = useCallback(() => {
+    if (operating.current && activeCommand.current !== 'network_check') return;
+    reader.current?.refresh([{
+      name: '网络状态',
+      read: () => invoke<NetworkStatus>('network_status'),
+      update: (next: NetworkStatus) => accept(next),
+    }]);
   }, [accept]);
 
   useEffect(() => {
     mounted.current = true;
-    void refresh();
-    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 3000);
-    return () => { mounted.current = false; revision.current++; window.clearInterval(timer); };
+    const coordinator = createReadCoordinator((_name, error) => setReadError(error ? safeError(error) : ''));
+    reader.current = coordinator;
+    refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') refresh(); }, 3000);
+    return () => { mounted.current = false; coordinator.dispose(); reader.current = null; window.clearInterval(timer); };
   }, [refresh]);
 
   useEffect(() => { if (importOpen) linkInput.current?.focus(); }, [importOpen]);
@@ -111,7 +110,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
     operating.current = true;
     activeCommand.current = command;
     operationStarted.current = Math.floor(Date.now() / 1000);
-    revision.current++;
+    reader.current?.invalidate();
     setOperation(command);
     setLocalError('');
     try {
@@ -124,6 +123,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
       if (mounted.current) { setLocalError(message); onError(message); }
       return false;
     } finally {
+      reader.current?.invalidate();
       operating.current = false;
       activeCommand.current = '';
       if (mounted.current) setOperation('');
@@ -195,7 +195,7 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
 
   return <div className="network-card-group" role="group" aria-label="代理与节点">
     <div className="network-group-heading"><div><h2>代理与节点</h2><p>Codex 订阅池专用网络</p></div><span className={'badge ' + (status?.settings.enabled ? '' : 'neutral')}>{status ? status.settings.enabled ? '内置代理' : '系统代理' : '状态未知'}</span></div>
-    {readError && <div className="network-callout network-danger" role="alert"><span>网络状态读取失败：{readError}</span><button type="button" onClick={() => void refresh()}>重试读取网络状态</button></div>}
+    {readError && <div className="network-callout network-danger" role="alert"><span>网络状态读取失败：{readError}</span><button type="button" onClick={() => { reader.current?.invalidate(); refresh(); }}>重试读取网络状态</button></div>}
     {!status && !readError && <p className="network-loading" role="status">正在读取网络状态…</p>}
     {status && draft && <>
       <div className="network-grid">
@@ -219,12 +219,14 @@ export function NetworkCards({ poolRunning, onError, onNotice }: Props) {
             const selected = subscription.id === status.selectedSubscriptionId;
             return <article className={'network-subscription-row' + (selected ? ' is-selected' : '')} key={subscription.id} aria-label={`订阅 ${subscription.name}`}>
               <span className="network-receipt-number" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
-              <div className="network-subscription-copy"><strong className="network-subscription-name">{subscription.name}</strong><p className="network-muted">{subscription.nodeCount} 个节点 · {subscription.kind === 'url' ? selected ? '链接订阅 · 每 6 小时更新' : '链接订阅 · 可手动更新' : '本地 YAML · 手动重新导入'}</p><p className="network-timestamp">更新：{date(subscription.updatedAt)}</p></div>
-              <div className="network-subscription-actions"><button type="button" aria-pressed={selected} disabled={blocked || dirty || selected} onClick={() => void run('network_select_subscription', { id: subscription.id }, `已选用 ${subscription.name}`)}>{selected ? '已选用' : '选用'}</button>
+              <div className="network-subscription-copy"><strong className="network-subscription-name">{subscription.name}</strong><p className="network-muted">{subscription.nodeCount} 个节点 · {subscription.kind === 'url' ? selected ? '链接订阅 · 每 6 小时更新' : '链接订阅 · 可手动更新' : '本地 YAML · 手动重新导入'}</p><p className="network-timestamp">更新：{date(subscription.updatedAt)}</p>
+                {subscription.error && <p className="network-danger-text" role="status">{safeError(subscription.error)}</p>}
+              </div>
+              <div className="network-subscription-actions"><button type="button" aria-pressed={selected} disabled={blocked || dirty || selected || !!subscription.error} onClick={() => void run('network_select_subscription', { id: subscription.id }, `已选用 ${subscription.name}`)}>{selected ? '已选用' : '选用'}</button>
                 <details className="network-subscription-menu"><summary>管理<span className="network-sr-only"> {subscription.name}</span></summary><div className="network-subscription-menu-actions">
-                  <button type="button" disabled={blocked || dirty || subscription.kind !== 'url'} onClick={() => void run('network_refresh', { id: subscription.id, systemProxy: false }, '订阅更新已处理')}>更新订阅</button>
-                  {subscription.kind === 'url' && <button type="button" disabled={blocked || dirty} onClick={() => void run('network_refresh', { id: subscription.id, systemProxy: true }, '已通过系统代理更新订阅')}>通过系统代理更新</button>}
-                  <button type="button" className="network-danger-text" disabled={blocked || dirty} onClick={() => { setLocalError(''); setRemoving(subscription); }}>移除订阅</button>
+                  <button type="button" disabled={blocked || dirty || !!subscription.requiresUpgrade || subscription.kind !== 'url' || status.settings.enabled && !status.nodes.length} onClick={() => void run('network_refresh', { id: subscription.id, systemProxy: false }, '订阅更新已处理')}>更新订阅</button>
+                  {subscription.kind === 'url' && <button type="button" disabled={blocked || dirty || !!subscription.requiresUpgrade} onClick={() => void run('network_refresh', { id: subscription.id, systemProxy: true }, '已通过系统代理更新订阅')}>通过系统代理更新</button>}
+                  <button type="button" className="network-danger-text" disabled={blocked || dirty || !!subscription.requiresUpgrade} onClick={() => { setLocalError(''); setRemoving(subscription); }}>移除订阅</button>
                 </div></details>
               </div>
             </article>;

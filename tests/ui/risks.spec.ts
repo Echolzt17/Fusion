@@ -250,6 +250,44 @@ test('optional IPC failures leave account/service controls usable and recover ne
   await expect(page.locator('.notification-row').filter({ hasText: '账号池接入读取失败' })).toHaveCount(1);
 });
 
+test('hanging status reads time out repeatedly and a stale reply cannot overwrite recovery', async ({ page }) => {
+  await page.clock.install();
+  await fixture(page);
+  await expect(page.getByRole('button', { name: '关闭账号池', exact: true })).toBeEnabled();
+  await page.evaluate(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.fixture.statusAttempts = 0;
+    w.__TAURI_INTERNALS__.invoke = (command: string, args: Record<string, unknown>) => {
+      if (command === 'connection_status') {
+        const attempt = ++w.fixture.statusAttempts;
+        if (attempt === 1) return new Promise(resolve => { w.fixture.resolveLateStatus = resolve; });
+        if (attempt === 2) return new Promise(() => {});
+      }
+      return invoke(command, args);
+    };
+    w.fixture.accounts[0].email = 'fresh-account@example.test';
+  });
+  await page.clock.runFor(8100);
+  await expect(page.getByRole('heading', { name: 'fresh-account@example.test' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '移除账号', exact: true })).toBeEnabled();
+  await page.clock.runFor(7000);
+  expect(await page.evaluate(() => (window as any).fixture.statusAttempts)).toBe(2);
+  await page.evaluate(() => {
+    const state = (window as any).fixture;
+    state.mode = 'off';
+    state.applied = false;
+    state.service.running = false;
+  });
+  await page.clock.runFor(4100);
+  await expect(page.getByRole('button', { name: '启动账号池', exact: true })).toBeEnabled();
+  await page.evaluate(() => (window as any).fixture.resolveLateStatus({
+    mode: 'on', configured: true, recoveryPending: true, reloadRequired: null, error: null,
+    operation: null, phase: null, operationStartedAt: null,
+  }));
+  await expect(page.getByRole('button', { name: '启动账号池', exact: true })).toBeEnabled();
+});
+
 test('modal traps keyboard, prevents background focus, restores opener, and cancel has no effect', async ({ page }) => {
   await fixture(page);
   const opener = page.getByRole('button', { name: '移除账号', exact: true });

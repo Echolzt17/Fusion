@@ -287,6 +287,43 @@ fn failed_installer_preserves_update_record_but_never_saves_enable_intent() {
     }
 }
 #[tokio::test]
+async fn finalization_failures_release_system_routes_and_allow_a_manual_retry() {
+    use pool_core::network::{KernelBackend, KernelEndpoint, Network};
+    struct IdleKernel;
+    impl KernelBackend for IdleKernel {
+        fn start(&self, _: &str) -> Result<KernelEndpoint> { panic!("system route should not launch the kernel"); }
+        fn stop(&self) -> Result<()> { Ok(()) }
+        fn running(&self) -> bool { false }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let network = Network::new(
+        Arc::new(pool_core::storage::Store::open(&root.path().join("pool.sqlite")).unwrap()),
+        Arc::new(NoCredentials::default()), root.path().join("network"), Arc::new(IdleKernel),
+    ).unwrap();
+    let update_root = root.path().join("updates");
+    std::fs::create_dir(&update_root).unwrap();
+    let updates = Updates::new(update_root.clone());
+    let resume = Resume { from: "1.0.6".into(), to: env!("CARGO_PKG_VERSION").into(), enabled: false,
+        claimed: false, directory: root.path().into() };
+
+    let failed = finish_with_network_stopped(&network, || Err("fixture: final config mismatch".into())).await;
+    assert!(failed.unwrap_err().contains("config mismatch"));
+    assert!(network.acquire_pool().await.unwrap().1.is_some());
+    std::fs::create_dir(update_root.join("resume.json")).unwrap();
+    assert!(finish_with_network_stopped(&network, || {
+        updates.install_with_resume(&resume, || panic!("installer must wait for resume record"))
+    }).await.is_err());
+    assert!(network.acquire_pool().await.unwrap().1.is_some());
+    std::fs::remove_dir(update_root.join("resume.json")).unwrap();
+    let failed = finish_with_network_stopped(&network, || {
+        updates.install_with_resume(&resume, || Err("fixture: installer cannot start".into()))
+    }).await;
+    assert!(failed.unwrap_err().contains("installer cannot start"));
+    assert!(network.acquire_pool().await.unwrap().1.is_some());
+    finish_with_network_stopped(&network, || Ok(())).await.unwrap();
+    assert!(network.acquire_pool().await.is_err());
+}
+#[tokio::test]
 async fn update_gate_waits_for_existing_operations_and_rejects_new_mutations() {
     let temp = tempfile::tempdir().unwrap();
     let updates = Updates::new(temp.path().into());

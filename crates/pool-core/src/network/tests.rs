@@ -611,7 +611,7 @@ mod runtime {
         );
     }
     #[tokio::test]
-    async fn legacy_single_subscription_upgrades_and_future_versions_are_rejected() {
+    async fn legacy_single_subscription_upgrades_and_future_snapshots_are_protected() {
         let temporary = tempfile::tempdir().unwrap();
         let network = network(&temporary, FakeKernel::new());
         add(&network, "旧订阅").await;
@@ -645,12 +645,7 @@ mod runtime {
             .store
             .set("network/v1/state", &raw.to_string())
             .unwrap();
-        assert!(network
-            .persistence
-            .load()
-            .err()
-            .unwrap()
-            .contains("较新版本"));
+        assert!(network.persistence.load().err().unwrap().contains("较新版本"));
         network.persistence.save_index(&loaded).unwrap();
         let mut future = network.state.lock().unwrap().snapshot.clone().unwrap();
         future.version = 2;
@@ -659,12 +654,53 @@ mod runtime {
             .persistence
             .replace(&loaded, &mut updated, &future, None)
             .unwrap();
-        assert!(network
-            .persistence
-            .load()
-            .err()
-            .unwrap()
-            .contains("较新版本"));
+        let (index, snapshot) = network.persistence.load().unwrap();
+        assert!(snapshot.is_none());
+        let id = index.selected_subscription_id.as_deref().unwrap();
+        assert!(index.require_editable(id).unwrap_err().contains("较新版本"));
+        let reopened = super::runtime::network(&temporary, FakeKernel::new());
+        let status = reopened.status().unwrap();
+        assert!(status.subscriptions[0].requires_upgrade);
+        assert!(reopened.remove_subscription().await.is_err());
+        assert!(reopened.refresh_subscription(true).await.is_err());
+        assert_eq!(status.selected_subscription_id.as_deref(), Some(id));
+    }
+
+    #[tokio::test]
+    async fn missing_subscription_snapshot_only_disables_its_own_route() {
+        let temporary = tempfile::tempdir().unwrap();
+        let original = network(&temporary, FakeKernel::new());
+        let selected = add(&original, "当前订阅").await;
+        let missing = add(&original, "缺失的备用订阅").await;
+        original.set_enabled(true).await.unwrap();
+        let saved = original.state.lock().unwrap().index.clone();
+        let missing_file = saved.subscriptions.iter().find(|entry| entry.id == missing)
+            .unwrap().snapshot_file.as_ref().unwrap();
+        let directory = temporary.path().join("network");
+        std::fs::remove_file(directory.join(missing_file)).unwrap();
+        let reopened = network(&temporary, FakeKernel::new());
+        let status = reopened.status().unwrap();
+        assert_eq!(status.selected_subscription_id.as_deref(), Some(selected.as_str()));
+        assert_eq!(status.subscriptions.len(), 2);
+        assert!(status.subscriptions[1].error.is_some());
+        assert!(reopened.select_subscription(&missing).await.is_err());
+        assert!(reopened.acquire_pool().await.unwrap().0.is_some());
+        reopened.shutdown().await.unwrap();
+
+        let backup = add(&original, "可用备用订阅").await;
+        std::fs::remove_file(directory.join(saved.snapshot_file.unwrap())).unwrap();
+        let reopened = network(&temporary, FakeKernel::new());
+        let status = reopened.status().unwrap();
+        assert!(status.settings.enabled);
+        assert_eq!(status.selected_subscription_id.as_deref(), Some(selected.as_str()));
+        assert!(status.nodes.is_empty());
+        assert!(reopened.acquire_pool().await.is_err());
+        assert!(reopened.select_subscription(&missing).await.is_err());
+        assert!(reopened.select_subscription(&backup).await.unwrap().settings.enabled);
+        assert!(reopened.acquire_pool().await.unwrap().0.is_some());
+        assert!(reopened.remove_subscription_by_id(Some(&missing)).await.is_ok());
+        reopened.shutdown().await.unwrap();
+        original.shutdown().await.unwrap();
     }
     #[tokio::test]
     async fn cancelled_queued_starts_cannot_restart_after_disable_shutdown_or_subscription_switch()
@@ -818,9 +854,10 @@ mod runtime {
         assert!(!network.status().unwrap().settings.enabled);
         kernel.fail.store(false, Ordering::SeqCst);
         network.set_enabled(true).await.unwrap();
-        network.shutdown().await.unwrap();
+        let shutdown = network.prepare_shutdown().await.unwrap();
         assert!(network.acquire().await.is_err());
-        network.retry().await.unwrap();
+        assert!(network.retry().await.is_err());
+        drop(shutdown);
         assert!(network.acquire().await.unwrap().is_some());
         network.set_enabled(false).await.unwrap();
     }

@@ -225,7 +225,16 @@ test('API form masks the key, preserves an existing key on blank edit, and does 
   await edit.getByLabel('来源名称', { exact: true }).fill('同事测试来源已编辑');
   await edit.getByRole('button', { name: '保存来源', exact: true }).click();
   expect((await calls(page, 'save_api_source')).at(-1).args.input.apiKey).toBeNull();
-  await expect(sourceCard(page, '同事测试来源已编辑')).toContainText('已保存');
+  const updated = sourceCard(page, '同事测试来源已编辑');
+  await expect(updated).toContainText('已保存');
+  await updated.getByRole('button', { name: '编辑', exact: true }).click();
+  await edit.getByLabel('Base URL', { exact: true }).fill('https://new-relay.example.test/anthropic');
+  await expect(edit.getByLabel('API Key', { exact: true })).toHaveAttribute('required', '');
+  await edit.getByRole('button', { name: '保存来源', exact: true }).click();
+  expect(await calls(page, 'save_api_source')).toHaveLength(2);
+  await edit.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(updated).toContainText('relay.example.test/anthropic');
+  await expect(updated).not.toContainText('new-relay.example.test');
 });
 
 test('base checks and explicit billed tests remain separate from capability acceptance', async ({ page }) => {

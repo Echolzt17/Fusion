@@ -60,7 +60,7 @@ impl ApiClients {
     }
     fn slot(&self,client:ClientKind)->&Slot {match client {ClientKind::Codex=>&self.codex,ClientKind::ClaudeCode=>&self.claude}}
     fn update(&self,client:ClientKind,f:impl FnOnce(&mut ClientStatus)) {f(&mut self.slot(client).status.lock().unwrap_or_else(|error|error.into_inner()));}
-    pub async fn statuses(&self)->Result<Vec<ClientStatus>> {
+    pub fn statuses(&self)->Result<Vec<ClientStatus>> {
         let mut statuses=Vec::new();
         for client in [ClientKind::Codex,ClientKind::ClaudeCode] {
             let slot=self.slot(client);let mut status=slot.status.lock().map_err(|_|"API 客户端状态锁异常")?.clone();
@@ -76,7 +76,7 @@ impl ApiClients {
         }
         Ok(statuses)
     }
-    pub async fn has_connection(&self,client:ClientKind)->Result<bool> {
+    pub fn has_connection(&self,client:ClientKind)->Result<bool> {
         let state=self.slot(client).status.lock().map_err(|_|"API 客户端状态锁异常")?;
         Ok(state.mode!="off" || self.store.get(state_key(client))?.is_some_and(|v|!v.is_empty())
             || (client==ClientKind::Codex&&api_config::pending(&self.store)?))
@@ -88,7 +88,7 @@ impl ApiClients {
         }
         Ok(())
     }
-    pub async fn logs(&self,client:ClientKind)->Result<Vec<ApiRequestLog>> {
+    pub fn logs(&self,client:ClientKind)->Result<Vec<ApiRequestLog>> {
         self.sources.logs(client)
     }
     pub async fn start(&self,client:ClientKind,id:&str)->Result<()> {
@@ -160,7 +160,7 @@ impl ApiClients {
         self.stop_locked(client).await
     }
     async fn stop_locked(&self,client:ClientKind)->Result<()> {
-        if !self.has_connection(client).await? {return Ok(());}
+        if !self.has_connection(client)? {return Ok(());}
         self.update(client,|s|{s.mode="stopping".into();s.phase="restoring".into();s.error=None;});
         let result=self.stop_inner(client).await;
         if let Err(error)=&result {self.update(client,|s|{s.mode="recoveryRequired".into();s.phase="failed".into();s.error=Some(error.clone());});}
@@ -199,7 +199,7 @@ impl ApiClients {
         codex.and(claude)
     }
     pub async fn official_claude(&self)->Result<()> {
-        if self.has_connection(ClientKind::ClaudeCode).await? {return Err("请先关闭 Claude API 连接，再打开官方登录流程".into());}
+        if self.has_connection(ClientKind::ClaudeCode)? {return Err("请先关闭 Claude API 连接，再打开官方登录流程".into());}
         #[cfg(windows)]
         return crate::blocking(process::official_login).await;
         #[cfg(not(windows))]

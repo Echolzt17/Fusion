@@ -17,6 +17,7 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -71,6 +72,7 @@ struct Context {
     key: String,
     upstream: String,
     cancel: CancellationToken,
+    dispatching_turns: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 struct Running {
     context: Context,
@@ -154,6 +156,7 @@ impl Gateway {
             key: self.accounts.api_key()?,
             upstream,
             cancel: cancel.clone(),
+            dispatching_turns: Default::default(),
         };
         let router = router(ctx.clone());
         let stop = draining.clone();
@@ -750,6 +753,31 @@ fn native_claim(a: &mut Audit, h: &HeaderMap, v: &Value)
 fn release_claim(ctx: &Context, claim: Option<&ReplayReservation>) {
     if let Some(claim) = claim { let _ = replay_guard::release(ctx, &claim.claim); }
 }
+struct TurnDispatch {
+    active: Arc<std::sync::Mutex<HashSet<String>>>,
+    key: String,
+}
+impl Drop for TurnDispatch {
+    fn drop(&mut self) {
+        self.active.lock().unwrap().remove(&self.key);
+    }
+}
+fn guard_turn(a: &mut Audit, h: &HeaderMap, v: &Value)
+    -> std::result::Result<Option<TurnDispatch>, Box<Response>>
+{
+    if !authorized(&a.ctx, h) {
+        return Err(Box::new(a.error(StatusCode::UNAUTHORIZED, "invalid_local_key", "本地接入密钥无效，请检查 Codex provider 配置")));
+    }
+    let ids = continuity::identities(h, v)
+        .map_err(|e| Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable", &e)))?;
+    let Some(key) = ids.into_iter().find(|key| key.starts_with("turn:")) else { return Ok(None); };
+    let active = a.ctx.dispatching_turns.clone();
+    if !active.lock().unwrap().insert(key.clone()) {
+        return Err(Box::new(a.error(StatusCode::CONFLICT, "continuity_unavailable",
+            "同一轮次已有请求正在派发，本次未发送上游")));
+    }
+    Ok(Some(TurnDispatch { active, key }))
+}
 struct ChatRouting {
     keys: Vec<String>,
     preferred: Option<String>,
@@ -985,9 +1013,8 @@ async fn prepare_response(
         portable::apply_projection(v);
         h.remove("x-codex-turn-state");
     }
-    // A turn becomes hard-bound only after an upstream response is accepted.
-    // A known HTTP quota refusal has not executed this turn and may use a new
-    // account on the next safe attempt; ambiguous sends are guarded separately.
+    // The dispatch site reserves the new turn before sending. Only a proven
+    // pre-dispatch failure or explicit refusal may clear that reservation.
     Ok(result)
 }
 async fn rejected(a: &mut Audit, lease: &Lease, r: reqwest::Response) -> Response {
@@ -1080,10 +1107,12 @@ async fn catalog_tracked(ctx: Context, h: HeaderMap, query: Option<String>, prog
     }
 }
 async fn catalog_inner(a: &mut Audit, h: &HeaderMap, version: Option<String>) -> Response {
+    let turn = match guard_turn(a, h, &Value::Null) { Ok(turn) => turn, Err(response) => return *response };
     let (lease, t) = match prepare(a, h, &Value::Null).await {
         Ok(v) => v,
         Err(r) => return *r,
     };
+    drop(turn);
     a.phase("catalog_proxy");
     let r = match request(a, &lease, &t, h, reqwest::Method::GET, "/models").await {
         Ok(r) => if let Some(version) = version { r.query(&[("client_version", version)]) } else { r },
@@ -1135,6 +1164,7 @@ async fn catalog_inner(a: &mut Audit, h: &HeaderMap, version: Option<String>) ->
 async fn compact(State(ctx): State<Context>, mut h: HeaderMap, tracking: RequestTracking, Json(mut v): Json<Value>) -> Response {
     let mut a = Audit::tracked(ctx, "compact", tracking);
     let mut replay = match native_claim(&mut a, &h, &v) { Ok(claim) => claim, Err(response) => return *response };
+    let _turn = match guard_turn(&mut a, &h, &v) { Ok(turn) => turn, Err(response) => return *response };
     if let Err(e) = portable::sanitize_rolled_history(&a.ctx, &mut h, &mut v) {
         release_claim(&a.ctx, replay.as_ref());
         return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
@@ -1355,6 +1385,7 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
         v["input"] = json!([{"role":"user","content":[{"type":"input_text","text":text}]}]);
     }
     let mut replay = match native_claim(&mut a, &h, &v) { Ok(claim) => claim, Err(response) => return *response };
+    let turn = match guard_turn(&mut a, &h, &v) { Ok(turn) => turn, Err(response) => return *response };
     let stream = v["stream"].as_bool().unwrap_or(false);
     let (mut lease, mut t) = match prepare_response(&mut a, &mut h, &mut v, false).await {
         Ok(v) => v,
@@ -1365,20 +1396,29 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
     if v.get("instructions").is_none() {
         v["instructions"] = json!("");
     }
-    let turn_keys = continuity::identities(&h, &v).unwrap_or_default().into_iter()
-        .filter(|key| key.starts_with("turn:")).collect::<Vec<_>>();
     let portable_attempt = a.diagnostic.routing == Some(crate::diagnostics::RoutingDecision::Portable);
     let r = loop {
         let r = match request(&mut a, &lease, &t, &h, reqwest::Method::POST, "/responses").await {
             Ok(r) => r.header("accept", "text/event-stream").json(&v),
             Err(e) => return a.network_error(e),
         };
+        let reserved_turn = turn.as_ref().filter(|_| portable_attempt);
+        if let Some(turn) = reserved_turn {
+            if let Err(e) = a.ctx.accounts.store.reserve_turn(&turn.key, &lease.account.id) {
+                return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
+            }
+        }
         a.phase("catalog_headers");
         if let Some(claim) = replay.as_mut() { claim.dispatched = true; }
         let r = match a.send(r, Duration::from_secs(180)).await {
             Ok(r) => r,
             Err(e) => {
                 if e.stage == FailureStage::Connect {
+                    if let Some(turn) = reserved_turn {
+                        if let Err(e) = a.ctx.accounts.store.release_refused_turn(&turn.key, &lease.account.id) {
+                            return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
+                        }
+                    }
                     if let Some(claim) = replay.as_mut() { claim.dispatched = false; }
                 }
                 return a.network_error(e);
@@ -1387,6 +1427,11 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
         // HTTP 429 is an explicit refusal before output. Unlike a broken
         // connection, 5xx or failed SSE, it cannot have executed model tools.
         if r.status() == StatusCode::TOO_MANY_REQUESTS {
+            if let Some(turn) = reserved_turn {
+                if let Err(e) = a.ctx.accounts.store.release_refused_turn(&turn.key, &lease.account.id) {
+                    return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
+                }
+            }
             // The server explicitly refused this attempt. Cancellation while
             // authorizing/queuing a backup must not retain an ambiguous-send
             // claim. A subsequent dispatch sets it again before sending.
@@ -1419,9 +1464,7 @@ async fn responses(State(ctx): State<Context>, mut h: HeaderMap, tracking: Reque
         if r.status() == StatusCode::TOO_MANY_REQUESTS { release_claim(&a.ctx, replay.as_ref()); }
         return rejected(&mut a, &lease, r).await;
     }
-    if let Err(e) = a.ctx.accounts.store.bind_many(&turn_keys, &lease.account.id) {
-        return a.error(StatusCode::CONFLICT, "continuity_unavailable", &e);
-    }
+    drop(turn);
     let turn_state = r.headers().get("x-codex-turn-state").cloned();
     // The official client parses SSE bytes even when the backend omits/mislabels
     // Content-Type. Validate an actual event before exposing that response as SSE.
@@ -1790,6 +1833,7 @@ mod tests {
     }
     pub(super) fn ctx(accounts: Arc<Accounts>, upstream: String) -> Context {
         Context {
+            dispatching_turns: Default::default(),
             requests: Arc::new(runtime::Registry::default()),
             draining: CancellationToken::new(),
             admission: Arc::new(admission::Admission::default()),

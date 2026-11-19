@@ -5,12 +5,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 struct FakeVault {
     values: Mutex<BTreeMap<String, String>>,
     fail_delete: AtomicBool,
+    fail_set: AtomicBool,
 }
 impl Vault for FakeVault {
     fn get(&self, key: &str) -> Result<Option<String>> {
         Ok(self.values.lock().unwrap().get(key).cloned())
     }
     fn set(&self, key: &str, value: &str) -> Result<()> {
+        if self.fail_set.load(Ordering::SeqCst) {
+            return Err("fixture save unavailable".into());
+        }
         self.values.lock().unwrap().insert(key.into(), value.into());
         Ok(())
     }
@@ -21,6 +25,34 @@ impl Vault for FakeVault {
         self.values.lock().unwrap().remove(key);
         Ok(())
     }
+}
+#[test]
+fn an_origin_change_requires_a_new_key_and_keeps_the_old_source_on_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&temp.path().join("source.db")).unwrap());
+    let vault = Arc::new(FakeVault::default());
+    let sources = Sources::new(store, vault.clone());
+    let first = sources.save(input(None, Some("public-old-key"))).unwrap();
+    let edit = |base_url: &str, key: Option<&str>| SourceInput {
+        base_url: base_url.into(),
+        model: "updated-model".into(),
+        ..input(Some(first.id.clone()), key)
+    };
+    let same_origin = sources.save(edit("http://127.0.0.1:12345/v2", None)).unwrap();
+    for address in ["http://127.0.0.1:12346/v1", "http://localhost:12345/v1", "https://127.0.0.1:12345/v1"] {
+        assert!(sources.save(edit(address, None)).unwrap_err().contains("API Key"));
+    }
+    vault.fail_set.store(true, Ordering::SeqCst);
+    assert!(sources.save(edit("https://example.test/v1", Some("public-new-key"))).is_err());
+    let old = sources.snapshot(&first.id).unwrap();
+    assert_eq!(old.source.base_url, same_origin.base_url);
+    assert_eq!(old.source.revision, same_origin.revision);
+    assert_eq!(old.key, "public-old-key");
+    vault.fail_set.store(false, Ordering::SeqCst);
+    let new = sources.save(edit("https://example.test/v1", Some("public-new-key"))).unwrap();
+    let snapshot = sources.snapshot(&new.id).unwrap();
+    assert_eq!(snapshot.source.base_url, "https://example.test/v1");
+    assert_eq!(snapshot.key, "public-new-key");
 }
 fn input(id: Option<String>, key: Option<&str>) -> SourceInput {
     SourceInput {

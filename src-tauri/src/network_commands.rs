@@ -3,7 +3,10 @@ use crate::{App, Result};
 use pool_core::network::{NetworkSettings, NetworkStatus, SubscriptionInput};
 
 #[tauri::command]
-pub fn network_status(a: tauri::State<App>) -> Result<NetworkStatus> { a.network.status() }
+pub async fn network_status(a: tauri::State<'_, App>) -> Result<NetworkStatus> {
+    let network = a.network.clone();
+    crate::blocking_read("network_status", move || network.status()).await
+}
 #[tauri::command]
 pub fn network_cancel_check(a:tauri::State<App>) {a.network.cancel_node_checks();}
 

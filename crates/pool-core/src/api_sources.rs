@@ -211,6 +211,15 @@ impl Sources {
         if previous.is_none() && directory.sources.len() >= MAX_SOURCES {
             return Err("API 来源数量已达上限".into());
         }
+        if input.api_key.is_none() {
+            if let Some(saved) = &previous {
+                let old = Url::parse(&saved.source.base_url).map_err(|_| "原 API Base URL 无效")?;
+                let new = Url::parse(&input.base_url).map_err(|_| "API Base URL 格式错误")?;
+                if old.origin() != new.origin() {
+                    return Err("更改 API 地址的协议、主机或端口时，请输入该站点的 API Key".into());
+                }
+            }
+        }
         let id = previous
             .as_ref()
             .map(|s| s.source.id.clone())
@@ -336,7 +345,7 @@ impl Sources {
             key,
             http: UpstreamHttp::new()?,
             direct: direct_client()?,
-            oauth: false,
+            claude_revision: None,
         })
     }
     pub(crate) fn current(&self, id: &str, revision: u64) -> Result<()> {
@@ -558,11 +567,11 @@ pub(crate) struct Snapshot {
     key: String,
     http: UpstreamHttp,
     direct: reqwest::Client,
-    oauth: bool,
+    pub claude_revision: Option<u64>,
 }
 impl Snapshot {
-    pub(crate) fn claude(source: ApiSource, key: String)->Result<Self> {
-        Ok(Self {source,key,http:UpstreamHttp::new()?,direct:direct_client()?,oauth:true})
+    pub(crate) fn claude(source: ApiSource, key: String, revision: u64) -> Result<Self> {
+        Ok(Self {source,key,http:UpstreamHttp::new()?,direct:direct_client()?,claude_revision:Some(revision)})
     }
     pub fn scope(&self) -> String {
         format!("{}/{}", self.source.id, self.source.revision)
@@ -590,7 +599,7 @@ impl Snapshot {
             NetworkMode::SystemProxy => self.http.request(method, &endpoint).await?.0,
         };
         Ok(match self.source.protocol {
-            Protocol::Messages if self.oauth => request.bearer_auth(&self.key)
+            Protocol::Messages if self.claude_revision.is_some() => request.bearer_auth(&self.key)
                 .header("anthropic-version", "2023-06-01")
                 .header("anthropic-beta", crate::claude_pool::BETA)
                 .header("x-app", "cli"),

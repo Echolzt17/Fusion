@@ -1,12 +1,12 @@
 //! Main-window-only commands. API resources never enter the subscription account pool.
-use crate::{blocking, close_connection, codex_lifecycle, App, Result};
+use crate::{blocking, blocking_read, close_connection, codex_lifecycle, App, Result};
 use pool_core::api_sources::{ApiSource, CheckResult, ClientKind, SourceInput};
 use tauri::Manager;
 
 #[tauri::command]
 pub async fn api_sources(a: tauri::State<'_, App>) -> Result<Vec<ApiSource>> {
     let sources = a.api_sources.clone();
-    blocking(move || sources.list()).await
+    blocking_read("api_sources", move || sources.list()).await
 }
 
 #[tauri::command]
@@ -36,7 +36,8 @@ pub async fn check_api_source(a: tauri::State<'_, App>, id: String, actual: bool
 
 #[tauri::command]
 pub async fn api_client_status(a: tauri::State<'_, App>) -> Result<Vec<crate::api_clients::ClientStatus>> {
-    a.api_clients.statuses().await
+    let clients = a.api_clients.clone();
+    blocking_read("api_client_status", move || clients.statuses()).await
 }
 
 #[tauri::command]
@@ -55,7 +56,7 @@ pub async fn start_api_connection(app: tauri::AppHandle, client: ClientKind, sou
     if client == ClientKind::Codex {
         // Only close the subscription connection when it actually owns the client.
         // An API-owned provider intentionally lies outside its inspection model.
-        if !a.api_clients.has_connection(ClientKind::Codex).await? {
+        if !a.api_clients.has_connection(ClientKind::Codex)? {
             let before = a.connection.status().await?;
             if before.mode != "off" {
                 if !matches!(before.mode, "on" | "recovery_required") { return Err("账号池正在切换，请等待完成".into()); }
@@ -79,7 +80,8 @@ pub async fn stop_api_connection(a: tauri::State<'_, App>, client: ClientKind) -
 
 #[tauri::command]
 pub async fn api_request_logs(a: tauri::State<'_, App>, client: ClientKind) -> Result<Vec<pool_core::api_gateway::ApiRequestLog>> {
-    a.api_clients.logs(client).await
+    let clients = a.api_clients.clone();
+    blocking_read("api_request_logs", move || clients.logs(client)).await
 }
 
 #[tauri::command]

@@ -103,7 +103,7 @@ fn request_close(app: tauri::AppHandle, exit_app: bool) {
         let store = app.state::<App>().accounts.store.clone();
         let mut result = async {
             let clients = app.state::<App>().api_clients.clone();
-            let api_owned = clients.has_connection(pool_core::api_sources::ClientKind::Codex).await?;
+            let api_owned = clients.has_connection(pool_core::api_sources::ClientKind::Codex)?;
             if exit_app { clients.stop_all().await?; }
             else { clients.stop(pool_core::api_sources::ClientKind::Codex).await?; }
             if api_owned && !config::has_backup(&store)? { return Ok(()); }
@@ -264,6 +264,31 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
         .await
         .map_err(|_| "本机数据任务异常")?
 }
+async fn read_deadline<T>(read: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    tokio::time::timeout(std::time::Duration::from_secs(4), read)
+        .await
+        .map_err(|_| "读取超时，保留上次数据")?
+}
+static ACTIVE_READS: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+struct ReadPermit(&'static str);
+impl Drop for ReadPermit {
+    fn drop(&mut self) {
+        ACTIVE_READS.lock().unwrap().remove(self.0);
+    }
+}
+async fn blocking_read<T: Send + 'static>(
+    name: &'static str, read: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    if !ACTIVE_READS.lock().map_err(|_| "本机读取状态不可用")?.insert(name) {
+        return Err("上次读取仍在结束，请稍后重试".into());
+    }
+    let permit = ReadPermit(name);
+    read_deadline(blocking(move || {
+        let _permit = permit;
+        read()
+    })).await
+}
 #[tauri::command]
 fn main_visible(window: tauri::WebviewWindow) -> bool {
     window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true)
@@ -287,7 +312,7 @@ fn open_pricing_website(app: tauri::AppHandle, site: PricingWebsite) -> std::res
 async fn accounts(a: tauri::State<'_, App>) -> Result<Vec<serde_json::Value>> {
     let accounts = a.accounts.clone();
     let scheduler = a.gateway.scheduler.clone();
-    blocking(move || {
+    blocking_read("accounts", move || {
         accounts
             .store
             .accounts()?
@@ -371,7 +396,7 @@ async fn consume_reset(a: tauri::State<'_, App>, id: String, credit_id: String) 
 }
 #[tauri::command]
 async fn service_status(a: tauri::State<'_, App>) -> Result<ServiceStatus> {
-    Ok(a.gateway.status().await)
+    read_deadline(async { Ok(a.gateway.status().await) }).await
 }
 #[tauri::command]
 async fn cancel_request(a: tauri::State<'_, App>, id: String) -> Result<()> {
@@ -379,11 +404,14 @@ async fn cancel_request(a: tauri::State<'_, App>, id: String) -> Result<()> {
 }
 #[tauri::command]
 async fn connection_status(a: tauri::State<'_, App>) -> Result<pool_core::connection::Status> {
-    if a.api_clients.has_connection(pool_core::api_sources::ClientKind::Codex).await? {
-        return Ok(pool_core::connection::Status { mode: "off", configured: false, recovery_pending: false,
-            reload_required: None, error: None, operation: None, phase: None, operation_started_at: None });
-    }
-    a.connection.status().await
+    let clients = a.api_clients.clone();
+    read_deadline(async {
+        if blocking_read("codex_api_ownership", move || clients.has_connection(pool_core::api_sources::ClientKind::Codex)).await? {
+            return Ok(pool_core::connection::Status { mode: "off", configured: false, recovery_pending: false,
+                reload_required: None, error: None, operation: None, phase: None, operation_started_at: None });
+        }
+        a.connection.status().await
+    }).await
 }
 #[tauri::command]
 async fn close_pool(app: tauri::AppHandle, exit_app: bool) -> Result<()> {
@@ -393,26 +421,27 @@ async fn close_pool(app: tauri::AppHandle, exit_app: bool) -> Result<()> {
 #[tauri::command]
 async fn logs(a: tauri::State<'_, App>) -> Result<Vec<RequestLog>> {
     let store = a.accounts.store.clone();
-    blocking(move || store.logs()).await
+    blocking_read("logs", move || store.logs()).await
 }
 #[tauri::command]
 async fn request_history(a: tauri::State<'_, App>, conversation_key: Option<String>, result: String, system: bool, cursor: Option<pool_core::storage::history::LogCursor>, filter: Option<pool_core::storage::history::HistoryFilter>) -> Result<pool_core::storage::history::LogPage> {
     let store = a.accounts.store.clone();
-    blocking(move || store.filtered_log_page(conversation_key.as_deref(), &result, system, cursor, filter.unwrap_or_default())).await
+    blocking_read("request_history", move || store.filtered_log_page(conversation_key.as_deref(), &result, system, cursor, filter.unwrap_or_default())).await
 }
 #[tauri::command]
 async fn conversation_usage(a: tauri::State<'_, App>) -> Result<serde_json::Value> {
     let store = a.accounts.store.clone();
-    blocking(move || Ok(serde_json::json!({"conversations":store.conversations()?,"recentRequest":store.recent_request(),"catalog":store.history_catalog()?}))).await
+    blocking_read("conversation_usage", move || Ok(serde_json::json!({"conversations":store.conversations()?,"recentRequest":store.recent_request(),"catalog":store.history_catalog()?}))).await
 }
 #[tauri::command]
 async fn usage(a: tauri::State<'_, App>) -> Result<Vec<pool_core::usage::AccountUsage>> {
     let store = a.accounts.store.clone();
-    blocking(move || store.usage()).await
+    blocking_read("usage", move || store.usage()).await
 }
 #[tauri::command]
 async fn usage_dashboard(a: tauri::State<'_, App>) -> Result<pool_core::local_usage::Dashboard> {
-    a.usage_dashboard.snapshot()
+    let dashboard = a.usage_dashboard.clone();
+    blocking_read("usage_dashboard", move || dashboard.snapshot()).await
 }
 #[tauri::command]
 async fn local_projects_status(a: tauri::State<'_, App>) -> Result<local_projects::ProjectStatus> {
@@ -431,7 +460,7 @@ impl local_projects::RestoreAdapter for LocalProjectAdapter {
         let a = self.handle.state::<App>();
         let state = a.connection.status().await?;
         let service = a.gateway.status().await;
-        let api_owned = a.api_clients.has_connection(pool_core::api_sources::ClientKind::Codex).await?;
+        let api_owned = a.api_clients.has_connection(pool_core::api_sources::ClientKind::Codex)?;
         let closing = a.close.lock().map_err(|_| "客户端关闭状态不可读")?.running
             || a.updates.installing.load(std::sync::atomic::Ordering::SeqCst);
         Ok(local_projects::RestoreConditions {
@@ -508,7 +537,7 @@ async fn select_account(a: tauri::State<'_, App>, account_id: Option<String>) ->
 #[tauri::command]
 async fn scheduling_status(a: tauri::State<'_, App>) -> Result<SchedulingStatus> {
     let scheduler = a.gateway.scheduler.clone();
-    blocking(move || scheduler.status()).await
+    blocking_read("scheduling_status", move || scheduler.status()).await
 }
 #[tauri::command]
 async fn set_selection_policy(a: tauri::State<'_, App>, policy: SelectionPolicy) -> Result<()> {
@@ -578,13 +607,11 @@ async fn image_compatibility(
     a: tauri::State<'_, App>,
 ) -> Result<pool_core::compatibility::ImageCompatibility> {
     let store = a.accounts.store.clone();
-    let running = a.gateway.status().await.running;
+    let running = service_status(a.clone()).await?.running;
     let path = config::codex_config_path()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking_read("image_compatibility", move || {
         pool_core::compatibility::status(&store, path, running, codex_lifecycle::running_identity(false))
-    })
-    .await
-    .map_err(|_| "无法检查生图兼容状态")?
+    }).await
 }
 #[tauri::command]
 async fn probe(a: tauri::State<'_, App>) -> Result<String> {

@@ -182,7 +182,7 @@ async fn native_replay_guard_releases_only_when_the_connector_proves_no_dispatch
         } else {
             (Some(socket), None)
         };
-        let (base, gateway) = serve(router(ctx(accounts, format!("http://{address}")))).await;
+        let (base, gateway) = serve(router(ctx(accounts.clone(), format!("http://{address}")))).await;
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let submit = || client.post(format!("{base}/v1/responses"))
             .bearer_auth("test-key")
@@ -190,6 +190,8 @@ async fn native_replay_guard_releases_only_when_the_connector_proves_no_dispatch
             .json(&json!({"input":"public fixture task","stream":false}));
         let first = submit().send().await.unwrap();
         assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+        let turn = binding_key("turn", "public-turn");
+        assert_eq!(accounts.store.binding(&turn).unwrap().as_deref(), connected.then_some("a"));
         let listener = if let Some(upstream) = upstream {
             upstream.await.unwrap()
         } else {
@@ -206,7 +208,7 @@ async fn native_replay_guard_releases_only_when_the_connector_proves_no_dispatch
                 }
             }))).await.unwrap();
         });
-        let second = submit().send().await.unwrap();
+        let second = submit().json(&json!({"input":"public fixture task","stream":true})).send().await.unwrap();
         assert_eq!(second.status(), if connected { StatusCode::BAD_REQUEST } else { StatusCode::OK });
         second.bytes().await.unwrap();
         assert_eq!(hits.load(Ordering::SeqCst), usize::from(!connected));

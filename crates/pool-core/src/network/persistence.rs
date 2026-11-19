@@ -6,6 +6,26 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 const INDEX_KEY: &str = "network/v1/state";
 const MAX_SNAPSHOT: usize = 16 * 1024 * 1024;
 
+#[derive(Clone)]
+pub(crate) enum SnapshotIssue {
+    Unavailable(String),
+    NewerVersion,
+}
+impl SnapshotIssue {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unavailable(message) => message,
+            Self::NewerVersion => "订阅来自较新版本，请更新 Fusion",
+        }
+    }
+}
+impl From<&str> for SnapshotIssue {
+    fn from(message: &str) -> Self { Self::Unavailable(message.into()) }
+}
+impl From<String> for SnapshotIssue {
+    fn from(message: String) -> Self { Self::Unavailable(message) }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Index {
@@ -37,6 +57,8 @@ pub(crate) struct SubscriptionRecord {
     pub current_node_id: Option<String>,
     #[serde(default)]
     pub health: BTreeMap<String, NodeHealth>,
+    #[serde(skip)]
+    pub snapshot_issue: Option<SnapshotIssue>,
 }
 impl SubscriptionRecord {
     pub fn new(id: String, snapshot: &Snapshot) -> Self {
@@ -62,10 +84,20 @@ impl SubscriptionRecord {
             url_key: None,
             current_node_id: None,
             health: BTreeMap::new(),
+            snapshot_issue: None,
         }
     }
 }
 impl Index {
+    pub fn require_editable(&self, id: &str) -> Result<()> {
+        let entry = self.subscriptions.iter().find(|entry| entry.id == id)
+            .ok_or("代理订阅不存在")?;
+        if let Some(SnapshotIssue::NewerVersion) = entry.snapshot_issue {
+            return Err(SnapshotIssue::NewerVersion.message().into());
+        }
+        Ok(())
+    }
+
     // The flattened fields are the selected subscription's working state. Keep
     // its saved entry current before persisting or selecting a different entry.
     pub fn sync_selected(&mut self) {
@@ -140,23 +172,42 @@ impl Persistence {
         {
             return Err("订阅凭据索引无效".into());
         }
-        let snapshot = self.load_snapshot(index.snapshot_file.as_deref())?;
         if index.version == 1 {
-            if let Some(snapshot) = &snapshot {
-                let id = index
-                    .snapshot_file
-                    .as_deref()
-                    .and_then(|file| file.strip_suffix(".bin"))
-                    .ok_or("订阅文件索引无效")?
-                    .to_owned();
-                index.subscriptions = vec![SubscriptionRecord::new(id.clone(), snapshot)];
+            if let Some(file) = index.snapshot_file.as_deref() {
+                let id = file.strip_suffix(".bin")
+                    .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+                    .ok_or("订阅文件索引无效")?.to_owned();
+                let saved = self.read_snapshot(Some(file));
+                let record = match saved {
+                    Ok(snapshot) => SubscriptionRecord::new(id.clone(), &snapshot),
+                    Err(_) => SubscriptionRecord {
+                        id: id.clone(), name: "旧版订阅".into(),
+                        kind: if index.url_key.is_some() { "url" } else { "file" }.into(),
+                        node_count: 0, updated_at: 0, settings: index.settings.clone(),
+                        snapshot_file: None, url_key: None, current_node_id: None,
+                        health: BTreeMap::new(), snapshot_issue: None,
+                    },
+                };
+                index.subscriptions = vec![record];
                 index.selected_subscription_id = Some(id);
                 index.sync_selected();
             }
             index.version = 2;
-        } else {
+        }
+        let selected = index.selected_subscription_id.as_deref();
+        if let Some(id) = selected {
+            let entry = index.subscriptions.iter().find(|entry| entry.id == id)
+                .ok_or("当前订阅索引无效")?;
+            if index.snapshot_file != entry.snapshot_file || index.url_key != entry.url_key {
+                return Err("当前订阅文件索引不一致".into());
+            }
+        } else if index.snapshot_file.is_some() || index.settings.enabled {
+            return Err("当前订阅索引无效".into());
+        }
+        let mut snapshot = None;
+        {
             let mut ids = std::collections::BTreeSet::new();
-            for entry in &index.subscriptions {
+            for entry in &mut index.subscriptions {
                 if uuid::Uuid::parse_str(&entry.id).is_err()
                     || !ids.insert(&entry.id)
                     || entry
@@ -166,59 +217,41 @@ impl Persistence {
                 {
                     return Err("订阅目录索引无效".into());
                 }
-                // Check every generation and its forward version, including
-                // inactive subscriptions, before accepting any state.
-                if self
-                    .load_snapshot(entry.snapshot_file.as_deref())?
-                    .is_none()
-                {
-                    return Err("订阅目录缺少已保存的节点".into());
+                match self.read_snapshot(entry.snapshot_file.as_deref()) {
+                    Ok(saved) if selected == Some(entry.id.as_str()) => snapshot = Some(saved),
+                    Ok(_) => {}
+                    Err(issue) => entry.snapshot_issue = Some(issue),
                 }
             }
-            if let Some(id) = index.selected_subscription_id.clone() {
-                let entry = index
-                    .subscriptions
-                    .iter()
-                    .find(|entry| entry.id == id)
-                    .ok_or("当前订阅索引无效")?;
-                if index.snapshot_file != entry.snapshot_file || index.url_key != entry.url_key {
-                    return Err("当前订阅文件索引不一致".into());
-                }
-            } else if snapshot.is_some() || index.settings.enabled {
-                return Err("当前订阅索引无效".into());
-            }
-        }
-        if snapshot.is_none() {
-            index.settings.enabled = false;
         }
         Ok((index, snapshot))
     }
-    pub fn load_snapshot(&self, file: Option<&str>) -> Result<Option<Snapshot>> {
-        Ok(match file {
-            Some(file) => {
-                let path = self.snapshot_path(file)?;
-                let metadata =
-                    std::fs::symlink_metadata(&path).map_err(|_| "无法读取已保存的订阅")?;
-                if !metadata.is_file()
-                    || metadata.file_type().is_symlink()
-                    || metadata.len() > (MAX_SNAPSHOT + 4096) as u64
-                {
-                    return Err("已保存订阅文件无效".into());
-                }
-                let data = std::fs::read(path).map_err(|_| "读取已保存订阅失败")?;
-                let decrypted = crypt(&data, false)?;
-                let snapshot: Snapshot =
-                    serde_json::from_slice(&decrypted).map_err(|_| "已保存订阅损坏")?;
-                if snapshot.version > 1 {
-                    return Err("订阅来自较新版本，请更新 Fusion".into());
-                }
-                if snapshot.nodes.is_empty() || snapshot.nodes.len() > MAX_NODES {
-                    return Err("已保存订阅节点数无效".into());
-                }
-                Some(snapshot)
-            }
-            None => None,
-        })
+    pub fn load_snapshot(&self, file: Option<&str>) -> Result<Snapshot> {
+        self.read_snapshot(file).map_err(|issue| issue.message().to_owned())
+    }
+    fn read_snapshot(&self, file: Option<&str>) -> std::result::Result<Snapshot, SnapshotIssue> {
+        let file = file.ok_or("订阅目录缺少已保存的节点")?;
+        let path = self.snapshot_path(file)?;
+        let metadata = std::fs::symlink_metadata(&path).map_err(|_| "无法读取已保存的订阅")?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() > (MAX_SNAPSHOT + 4096) as u64
+        {
+            return Err("已保存订阅文件无效".into());
+        }
+        let data = std::fs::read(path).map_err(|_| "读取已保存订阅失败")?;
+        let decrypted = crypt(&data, false)?;
+        #[derive(Deserialize)]
+        struct Header { version: u32 }
+        let header: Header = serde_json::from_slice(&decrypted).map_err(|_| "已保存订阅损坏")?;
+        if header.version > 1 {
+            return Err(SnapshotIssue::NewerVersion);
+        }
+        let snapshot: Snapshot = serde_json::from_slice(&decrypted).map_err(|_| "已保存订阅损坏")?;
+        if snapshot.nodes.is_empty() || snapshot.nodes.len() > MAX_NODES {
+            return Err("已保存订阅节点数无效".into());
+        }
+        Ok(snapshot)
     }
     fn snapshot_path(&self, name: &str) -> Result<PathBuf> {
         let id = name.strip_suffix(".bin").ok_or("订阅文件索引无效")?;
@@ -375,6 +408,7 @@ impl Persistence {
             entry.kind = snapshot.kind.clone();
             entry.node_count = snapshot.nodes.len();
             entry.updated_at = snapshot.updated_at;
+            entry.snapshot_issue = None;
         }
         self.write_inactive(index, &mut next, snapshot, url, selected.as_deref())?;
         Ok(next)
@@ -424,6 +458,7 @@ impl Persistence {
             entry.kind = snapshot.kind.clone();
             entry.node_count = snapshot.nodes.len();
             entry.updated_at = snapshot.updated_at;
+            entry.snapshot_issue = None;
         }
         new.sync_selected();
         if let Some(id) = selected {

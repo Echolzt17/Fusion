@@ -609,7 +609,9 @@ async fn forward(State(mut context): State<Arc<Context>>, request: Request) -> R
     };
     let status = response.status();
     audit.log.upstream_status = Some(status.as_u16());
-    if let Some(pool)=&context.pool { let _=pool.failure(&context.snapshot.source.id,status.as_u16()); }
+    if let (Some(pool), Some(revision)) = (&context.pool, context.snapshot.claude_revision) {
+        let _ = pool.failure(&context.snapshot.source.id, revision, status.as_u16());
+    }
     if !status.is_success() {
         return audit.fail(
             status,

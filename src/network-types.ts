@@ -44,6 +44,8 @@ export type NetworkStatus = {
 };
 
 export type SubscriptionView = {
+  error?: string | null;
+  requiresUpgrade?: boolean;
   id: string;
   name: string;
   kind: 'url' | 'file';

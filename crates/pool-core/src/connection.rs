@@ -37,7 +37,7 @@ pub struct Connection {
     exe: PathBuf,
     operation: Arc<Mutex<()>>,
     transition: Arc<std::sync::Mutex<Transition>>,
-    inspection: Mutex<Option<(Instant, u64, Inspection)>>,
+    inspection: Arc<Mutex<Option<(Instant, u64, Inspection)>>>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,7 +94,7 @@ impl Connection {
             exe,
             operation: Arc::new(Mutex::new(())),
             transition: Arc::new(std::sync::Mutex::new(Transition::default())),
-            inspection: Mutex::new(None),
+            inspection: Arc::new(Mutex::new(None)),
         })
     }
     fn update(&self, change: impl FnOnce(&mut Transition)) {
@@ -104,7 +104,7 @@ impl Connection {
     }
     async fn inspect(&self) -> Result<Inspection> {
         let revision = self.transition.lock().unwrap().revision;
-        let mut cache = self.inspection.lock().await;
+        let mut cache = self.inspection.clone().lock_owned().await;
         if let Some((_, _, value)) = cache
             .as_ref()
             .filter(|(at, r, _)| *r == revision && at.elapsed() < Duration::from_secs(3))
@@ -116,13 +116,13 @@ impl Connection {
             self.path.clone(),
             self.exe.clone(),
         );
-        let value = blocking(move || {
+        blocking(move || {
             let (safe, error) =
                 match config::detached(&path, &exe, store.settings().map_or(18765, |s| s.port)) {
                     Ok(safe) => (safe, None),
                     Err(e) => (false, Some(e)),
                 };
-            Ok(Inspection {
+            let value = Inspection {
                 pending: config::has_backup(&store).unwrap_or(true),
                 transaction: config::recovery_transaction_pending(&path),
                 configured: config::is_applied(&store, &path).unwrap_or(false),
@@ -132,11 +132,12 @@ impl Connection {
                 reload: store
                     .get("codex_client_reload_required")?
                     .filter(|s| !s.is_empty()),
-            })
+            };
+            // Keep the owned cache lock with the worker even if an IPC caller times out.
+            *cache = Some((Instant::now(), revision, value.clone()));
+            Ok(value)
         })
-        .await?;
-        *cache = Some((Instant::now(), revision, value.clone()));
-        Ok(value)
+        .await
     }
     pub async fn status(&self) -> Result<Status> {
         let i = self.inspect().await?;
