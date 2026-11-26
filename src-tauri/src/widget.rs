@@ -8,7 +8,7 @@ use std::{
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 const LABEL: &str = "pool-widget";
-const CAPSULE_WIDTH: f64 = 416.;
+pub(crate) const CAPSULE_WIDTH: f64 = 208.;
 const CAPSULE_HEIGHT: f64 = 40.;
 const PANEL_WIDTH: f64 = 416.;
 const PANEL_HEIGHT: f64 = 520.;
@@ -701,10 +701,10 @@ mod tests {
     fn widget_dimensions_keep_the_capsule_anchor_when_expanding() {
         let anchor = Anchor { x: 600, y: 700 };
         let (a, w, h, x, y) = geometry(anchor, (0, 0, 1200, 900), 1., false);
-        assert_eq!((w, h, x, y), (416, 40, 600, 700));
+        assert_eq!((w, h, x, y), (208, 40, 600, 700));
         let (_, w, h, x, y) = geometry(a, (0, 0, 1200, 900), 1., true);
-        assert_eq!((w, h, x, y), (416, 520, 600, 220));
-        assert_eq!((x + w as i32, y + h as i32), (1016, 740));
+        assert_eq!((w, h, x, y), (416, 520, 392, 220));
+        assert_eq!((x + w as i32, y + h as i32), (808, 740));
     }
     #[test]
     fn anchor_preserves_logical_position_when_moving_between_dpi_scales() {

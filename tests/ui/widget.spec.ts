@@ -159,12 +159,18 @@ test('old instances and late revisions cannot toggle or replay native actions', 
   expect(await page.evaluate(()=>(window as any).widgetFixture.calls.filter((c:any)=>c.command==='widget_set_expanded').length)).toBe(2);
 });
 
-test('the actual 416 by 40 collapsed viewport never clips the capsule after opening and closing',async({browser})=>{
+test('the actual 208 by 40 collapsed viewport never clips the capsule after opening and closing',async({browser})=>{
   for(const scale of [1,1.25,1.5,2]){
-    const context=await browser.newContext({viewport:{width:416,height:40},deviceScaleFactor:scale});
+    const context=await browser.newContext({viewport:{width:208,height:40},deviceScaleFactor:scale});
     const page=await context.newPage();await fixture(page);
-    await page.setViewportSize({width:416,height:40});
-    await page.evaluate(()=>document.fonts.ready);
+    await page.setViewportSize({width:208,height:40});
+    await page.evaluate(()=>{
+      document.documentElement.dataset.theme='dark';
+      const state=(window as any).widgetFixture;
+      state.remaining=93;state.poolRemaining=193;state.tokens=657400000;
+      return document.fonts.ready;
+    });
+    await expect(page.locator('.widget-tokens')).toHaveText('657.4M*',{timeout:6000});
     const fullyVisible=async()=>{
       const boxes=await page.evaluate(()=>{
         const rect=(selector:string)=>{const r=document.querySelector(selector)!.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};};
@@ -183,7 +189,7 @@ test('the actual 416 by 40 collapsed viewport never clips the capsule after open
     const footer=await page.locator('.widget-summary-footer').boundingBox();
     expect(footer!.y+footer!.height).toBeLessThanOrEqual(480);
     await page.keyboard.press('Escape');
-    await page.setViewportSize({width:416,height:40});
+    await page.setViewportSize({width:208,height:40});
     await expect(page.locator('.widget-panel')).toBeHidden();
     await fullyVisible();
     await context.close();
@@ -193,12 +199,12 @@ async function navigate(page:Page){await page.getByRole('button',{name:/^分类�
 async function select(page:Page,name:string,option:string){await page.getByRole('combobox',{name,exact:true}).click();await page.getByRole('option',{name:option,exact:true}).click();await page.keyboard.press('Escape');}
 
 
-test('capsule shows the actual pool account and plan; summary scope survives collapse',async({page})=>{
+test('compact metrics retain account and plan in tooltip; summary scope survives collapse',async({page})=>{
   await fixture(page);
   const capsule=page.locator('.widget-capsule');
-  await expect(capsule).toHaveCSS('width','416px');await expect(capsule).toHaveCSS('height','40px');
-  await expect(capsule).toContainText('池·账号1 Plus·余68%');await expect(capsule).toContainText('合计 148%');await expect(capsule).toContainText('Token 942.4k*');
-  await expect(capsule).toContainText('账号1');
+  await expect(capsule).toHaveCSS('width','208px');await expect(capsule).toHaveCSS('height','40px');
+  await expect(capsule).toContainText('68%');await expect(capsule).toContainText('Σ148%');await expect(capsule).toContainText('942.4k*');
+  await expect(capsule.locator('button')).toHaveAttribute('title',/账号1 Plus/);
   expect(await page.evaluate(()=>(window as any).widgetFixture.calls.filter((c:any)=>c.command==='widget_snapshot').every((c:any)=>!c.args.details))).toBe(true);
   await open(page);
   await expect(page.getByRole('tab',{name:'本对话',exact:true})).toHaveAttribute('aria-selected','true');
@@ -252,31 +258,31 @@ test('collapse and native cursor correction clear hover and focus even without p
   await expect(toggle).toHaveAttribute('aria-expanded','true');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded','false');
-  await page.setViewportSize({width:416,height:40});
+  await page.setViewportSize({width:208,height:40});
   await expect(toggle).not.toBeFocused();
   await toggle.hover();
   await expect.poll(swept).toBeGreaterThanOrEqual(0);
   // Keep CSS :hover true, just as when a child resize loses WebView2's leave.
   await page.evaluate(()=>window.dispatchEvent(new Event('blur')));
-  await expect.poll(swept).toBeLessThan(-300);
+  await expect.poll(swept).toBeLessThan(-200);
   await page.mouse.move(1,1);await toggle.hover();
   await expect.poll(swept).toBeGreaterThanOrEqual(0);
   await page.evaluate(()=>{const s=(window as any).widgetFixture;s.callbacks[s.listeners['widget-hovered']]({payload:false});});
-  await expect.poll(swept).toBeLessThan(-300);
+  await expect.poll(swept).toBeLessThan(-200);
   await toggle.focus();await page.keyboard.press('Enter');
   await expect(toggle).toHaveAttribute('aria-expanded','true');
   await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded','false');
   await expect(toggle).not.toBeFocused();
-  await expect.poll(swept).toBeLessThan(-300);
+  await expect.poll(swept).toBeLessThan(-200);
   await page.screenshot({path:'test-results/widget-collapsed-after-interaction.png',animations:'disabled'});
 });
 
 test('partial quota, unknown conversation, failed reads, drag and native collapse stay safe',async({page})=>{
   await fixture(page);await open(page);
   await page.evaluate(()=>{const s=(window as any).widgetFixture;s.quotaAccounts=1;s.poolRemaining=42;s.remaining=null;s.tokens=null;s.recent=null;});
-  await expect(page.locator('.widget-capsule')).toContainText('·余—',{timeout:6000});
-  await expect(page.locator('.widget-capsule')).toContainText('合计 42%*');
+  await expect(page.locator('.widget-capsule')).toContainText('—',{timeout:6000});
+  await expect(page.locator('.widget-capsule')).toContainText('Σ42%*');
   await expect(page.locator('.widget-empty')).toContainText('未识别对话');
   await expect(page.locator('.widget-request-total')).toHaveCount(0);
   await page.getByRole('tab',{name:'全部对话',exact:true}).click();
@@ -298,15 +304,15 @@ test('account attribution, preference and stale quota stay explicit after accoun
   await expect(source).toContainText('最近实际请求账号');
   await expect(source).toContainText('账号1');
   await page.evaluate(()=>{const s=(window as any).widgetFixture;s.recent='thread:bbbbbbbbbbbb';s.plan='Pro 100';});
-  await expect(page.locator('.widget-capsule')).toContainText('池·账号2 Pro 100·余68%',{timeout:6000});
+  await expect(page.locator('.widget-capsule button')).toHaveAttribute('title',/账号2 Pro 100 · 剩余 68%/,{timeout:6000});
   await expect(source).toContainText('账号2');
   await expect(source).toContainText('并发请求可能使用其他池账号');
   await page.evaluate(()=>{const s=(window as any).widgetFixture;s.accountSource='preferred';s.quotaState='stale';s.remaining=null;});
-  await expect(page.locator('.widget-capsule')).toContainText('池·首选·账号2 Pro 100·余—',{timeout:6000});
+  await expect(page.locator('.widget-capsule button')).toHaveAttribute('title',/首选·账号2 Pro 100 · 剩余 —/,{timeout:6000});
   await expect(source).toContainText('首选账号 · 尚无业务请求');
   await expect(source).toContainText('已过期');
   await page.evaluate(()=>{const s=(window as any).widgetFixture;s.accountSource='unassigned';s.plan=null;s.quotaState='query_failed';});
-  await expect(page.locator('.widget-capsule')).toContainText('池·待分配账号·余—',{timeout:6000});
+  await expect(page.locator('.widget-capsule button')).toHaveAttribute('title',/待分配账号 · 剩余 —/,{timeout:6000});
   await expect(source).toContainText('最近请求 · 等待分配账号');
   await expect(source).toContainText('查询失败，额度未知');
   await expect(source).not.toContainText('账号2');

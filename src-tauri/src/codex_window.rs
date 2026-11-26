@@ -420,7 +420,7 @@ pub fn capsule_hovered(widget: HWND, scale: f64) -> bool {
         if GetCursorPos(&mut point).is_err() || GetClientRect(widget, &mut rect).is_err()
             || !contains_window(widget, WindowFromPoint(point))
             || !ScreenToClient(widget, &mut point).as_bool() { return false; }
-        point.x >= (rect.right - (340. * scale).round() as i32).max(0)
+        point.x >= (rect.right - (crate::widget::CAPSULE_WIDTH * scale).round() as i32).max(0)
             && point.x < rect.right && point.y >= (rect.bottom - (40. * scale).round() as i32).max(0)
             && point.y < rect.bottom
     }

@@ -184,9 +184,9 @@ export function PoolWidget() {
         onMouseDown={e => e.preventDefault()}
         title={warning || `${snapshot.currentAccountSource === 'recent_request' ? '最近实际请求' : '尚无实际请求确认'}：${identity} · 剩余 ${quota}。${quotaTitle}累计 ${snapshot.tokens?.toLocaleString('zh-CN') ?? '未知'} Token${snapshot.usagePartial ? '，仅含已上报用量，历史覆盖可能不完整' : ''}`}
         onClick={() => action(expand(!desired.current))}>
-        <span className="widget-account-quota"><span className="widget-account-identity">池·{identity}</span><span>·余<b>{quota}</b></span></span><span className="widget-divider" />
-        <span className="widget-metric" title={quotaTitle}>合计 <b>{poolQuota}</b></span><span className="widget-divider" />
-        <span className="widget-metric">Token <b>{tokens}</b></span>
+        <span className="widget-current-quota" data-level={snapshot.remaining == null ? 'unknown' : snapshot.remaining <= 10 ? 'low' : 'normal'} title={`当前账号：${identity} · 剩余 ${quota}`} aria-label={`当前账号剩余 ${quota}`}><b>{quota}</b></span><span className="widget-divider" />
+        <span className="widget-metric widget-pool-quota" title={quotaTitle} aria-label={`账号池合计 ${poolQuota}`}><span aria-hidden="true">Σ</span><b>{poolQuota}</b></span><span className="widget-divider" />
+        <span className="widget-metric widget-tokens" title="账号池累计 Token；* 表示用量覆盖不完整" aria-label={`累计 Token ${tokens}`}><b>{tokens}</b></span>
         <span className="widget-arrow" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 15V5m-4 4 4-4 4 4" /></svg></span>
       </button>
     </div>

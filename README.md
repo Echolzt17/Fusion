@@ -6,22 +6,22 @@
 
 Windows 本机账号池 · 可读历史后台换号 · 额度与用量可见 · 一键启停
 
-**当前版本：1.0.17 · Windows 10 / 11 x64**
+**当前版本：1.0.18 · Windows 10 / 11 x64**
 
-本版修复同轮重复派发、更新失败后的网络恢复及桌面状态刷新。
+本版将悬浮胶囊宽度减半，精简为额度、Σ 合计和 Token 数值。
 
-[下载 v1.0.17 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.17/Fusion_1.0.17_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.17) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
+[下载 v1.0.18 安装包](https://github.com/Echolzt17/Fusion/releases/download/v1.0.18/Fusion_1.0.18_x64-setup.exe) · [更新说明](https://github.com/Echolzt17/Fusion/releases/tag/v1.0.18) · [源码与开发指南](https://github.com/Echolzt17/Fusion/blob/main/docs/DEVELOPMENT.md) · [反馈问题](https://github.com/Echolzt17/Fusion/issues)
 
 </div>
 
-## v1.0.17 的改进
+## v1.0.18 的改进
 
-- Codex 在发送前锁定轮次归属，防止同一轮的等价请求重复派发。明确拒绝额度时，可安全接续的新轮次仍可选择备用账号。
-- 更新收尾失败后恢复网络路由。单份 VPN 订阅快照损坏时，Fusion 仍可启动并在对应订阅卡片显示恢复入口。
-- Claude 的旧请求失败不会覆盖重新授权结果。手动 API 来源更改协议、主机或端口时需要填写对应站点的密钥。
-- 只读状态刷新在超时后可恢复，并忽略迟到的旧结果。
+- 胶囊从 416×40 缩为 208×40，减少常驻文字。
+- 当前额度用绿色、低额度用橙色，池总额度以紫色 Σ 区分，Token 用紧凑数值显示。
+- 账号、套餐和来源可悬停或展开查看；未知值与覆盖不完整标记保留。
+- Windows 原生悬停区域同步缩小，展开面板和拖动操作保留。
 
-真实订阅业务、远程 VPN 订阅和应用内覆盖升级仍待验收。
+沿用 1.0.17 的业务修复。真实宿主操作、覆盖安装及应用内升级仍待验收。
 
 ## Fusion 能做什么？
 
